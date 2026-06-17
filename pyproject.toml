@@ -1,0 +1,33 @@
+[project]
+name = "shell-bucket"
+version = "0.1.0"
+description = "iTerm2-integrated SSH wrapper with lazy file delivery — 'You CAN take it with you!'"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "asyncssh>=2.18",
+    "click>=8.1",
+    "cryptography>=44",
+    "platformdirs>=4.3",
+]
+
+[project.scripts]
+shell-bucket = "shell_bucket.cli:cli"
+
+[build-system]
+requires = ["uv_build>=0.10,<0.11"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: tests requiring external resources (e.g. Docker)",
+]
+addopts = "-m 'not integration'"
