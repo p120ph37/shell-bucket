@@ -300,7 +300,7 @@ async def test_transport_manager_one_shot_renegotiation() -> None:
 
 @pytest.mark.asyncio
 async def test_up_reneg_forces_offer_past_one_shot_guard() -> None:
-    # `UP:RENEG` from the mux (e.g. `sb ctl udpup`) forces a fresh offer regardless
+    # `UP:RENEG` from the mux (e.g. `sb ctl bh --up`) forces a fresh offer regardless
     # of how many times the one-shot auto-reneg guard has already fired.
     writes: list[bytes] = []
     tm = TransportManager(write_raw=writes.append, stun=[])

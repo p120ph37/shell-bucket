@@ -1492,12 +1492,46 @@ fn print_comp_table(title string, rows [][]string) {
 	}
 }
 
-// `sb ctl [-v] [status|udpup [ip:port,...]|udpdn|kill <sel> [--match=X]]` -- query or
-// control the running mux. No args (or `status`): formatted session stats; add `-v`
-// to also list each relay/port/rpc (pid * category * description). `udpup` asks the
-// wrapper to (re)negotiate the UDP backhaul (optional `ip:port,...` overrides the mux's
-// advertised candidates when STUN can't find a public address); `udpdn`/`udpdown`
-// forces a lossless revert to in-band. `kill <sel>` SAFELY stops session components:
+// Pretty-print the UDP-backhaul block of a STATUS reply. Shared by `status` (full
+// dashboard) and bare `bh`/`backhaul` (state-only readout). A separate "Side-channel:
+// inactive" line stands in when no backhaul is established.
+fn print_bh_section(kv map[string]string) {
+	bh_st := kv['bh_state']
+	if bh_st == 'inactive' || bh_st == '' {
+		println('Side-channel: inactive')
+		println('')
+		return
+	}
+	bh_srflx := kv['bh_srflx']
+	bh_peers := kv['bh_peer_cands']
+	bh_txb := fmt_bytes(kv['bh_tx_bytes'].i64())
+	bh_txf := kv['bh_tx_frames']
+	bh_rxb := fmt_bytes(kv['bh_rx_bytes'].i64())
+	bh_rxf := kv['bh_rx_frames']
+	rtt := kv['bh_arq_rtt_ms']
+	rto := kv['bh_arq_rto_ms']
+	inflight_b := fmt_bytes(kv['bh_arq_inflight_bytes'].i64())
+	inflight_s := kv['bh_arq_inflight_segs']
+	mut hdr := 'Side-channel: ${bh_st}'
+	if bh_peers.len > 0 {
+		hdr += '   ${bh_peers}'
+	}
+	if bh_srflx.len > 0 {
+		hdr += '   srflx ${bh_srflx}'
+	}
+	println(hdr)
+	println('  tx: ${bh_txb} (${bh_txf} frames)   rx: ${bh_rxb} (${bh_rxf} frames)')
+	println('  rtt: ${rtt} ms  rto: ${rto} ms  in-flight: ${inflight_s} segs / ${inflight_b}')
+	println('')
+}
+
+// `sb ctl [-v] [status|bh [--up [ip:port,...]|--down]|kill <sel> [--match=X]]` --
+// query or control the running mux. No args (or `status`): formatted session stats; add
+// `-v` to also list each relay/port/rpc (pid * category * description). `bh` (alias
+// `backhaul`) without flags prints the UDP backhaul's state + a usage hint; with `--up`
+// it asks the wrapper to (re)negotiate (extra `ip:port` args override the mux's
+// advertised candidates when STUN can't find a public address); with `--down` it forces
+// a lossless revert to in-band. `kill <sel>` SAFELY stops session components:
 // `<sel>` is all|relays|ports|rpcs|<pid>, `--match=X` filters to descriptions
 // containing X (and double-guards a numeric pid against PID reuse). Bare `kill` prints
 // usage + the `-v` listing. Only kernel-attested session components are ever signalled.
@@ -1561,7 +1595,6 @@ fn run_ctl(args []string) {
 			main_tx := fmt_bytes(kv['main_tx_bytes'].i64())
 			pty_rx := fmt_bytes(kv['pty_rx_bytes'].i64())
 			pty_tx := fmt_bytes(kv['pty_tx_bytes'].i64())
-			bh_st := kv['bh_state']
 			println('=== sb mux status ===')
 			println('depth: ${dep}  uptime: ${h:02}:${m2:02}:${s2:02}')
 			println('')
@@ -1571,32 +1604,7 @@ fn run_ctl(args []string) {
 			println('PTY')
 			println('  rx: ${pty_rx}   tx: ${pty_tx}')
 			println('')
-			if bh_st != 'inactive' {
-				bh_srflx := kv['bh_srflx']
-				bh_peers := kv['bh_peer_cands']
-				bh_txb := fmt_bytes(kv['bh_tx_bytes'].i64())
-				bh_txf := kv['bh_tx_frames']
-				bh_rxb := fmt_bytes(kv['bh_rx_bytes'].i64())
-				bh_rxf := kv['bh_rx_frames']
-				rtt := kv['bh_arq_rtt_ms']
-				rto := kv['bh_arq_rto_ms']
-				inflight_b := fmt_bytes(kv['bh_arq_inflight_bytes'].i64())
-				inflight_s := kv['bh_arq_inflight_segs']
-				mut hdr := 'Side-channel: ${bh_st}'
-				if bh_peers.len > 0 {
-					hdr += '   ${bh_peers}'
-				}
-				if bh_srflx.len > 0 {
-					hdr += '   srflx ${bh_srflx}'
-				}
-				println(hdr)
-				println('  tx: ${bh_txb} (${bh_txf} frames)   rx: ${bh_rxb} (${bh_rxf} frames)')
-				println('  rtt: ${rtt} ms  rto: ${rto} ms  in-flight: ${inflight_s} segs / ${inflight_b}')
-				println('')
-			} else {
-				println('Side-channel: inactive')
-				println('')
-			}
+			print_bh_section(kv)
 			nclients := kv['clients'].int()
 			nports := kv['ports'].int()
 			nrelays := kv['relays'].int()
@@ -1614,27 +1622,65 @@ fn run_ctl(args []string) {
 			}
 			exit(0)
 		}
-		'udpdn', 'udpdown' {
-			write_str(fd, 'BH:DOWN\n')
-			resp, rok := read_line(fd)
-			C.close(fd)
-			if !rok || !resp.starts_with('OK') {
-				eprintln('sb ctl: ${resp}')
-				C._exit(1)
+		'bh', 'backhaul' {
+			// `--up` / `--down` may appear anywhere in pos; anything else is treated
+			// as candidate `ip:port` values for --up. Bare `bh` (no flag) prints the
+			// backhaul state subset of `status` plus a usage hint -- no action.
+			mut want_up := false
+			mut want_down := false
+			mut cands := []string{}
+			for a in pos[1..] {
+				match a {
+					'--up' { want_up = true }
+					'--down' { want_down = true }
+					else { cands << a }
+				}
 			}
-			println(resp)
-			exit(0)
-		}
-		'udpup' {
-			cand_arg := if pos.len > 1 { ':${pos[1..].join(',')}' } else { '' }
-			write_str(fd, 'BH:UP${cand_arg}\n')
-			resp, rok := read_line(fd)
-			C.close(fd)
-			if !rok || !resp.starts_with('OK') {
-				eprintln('sb ctl: ${resp}')
-				C._exit(1)
+			if want_up && want_down {
+				C.close(fd)
+				die('sb ctl bh: --up and --down are mutually exclusive')
 			}
-			println('udp backhaul renegotiation requested')
+			if want_down {
+				write_str(fd, 'BH:DOWN\n')
+				resp, rok := read_line(fd)
+				C.close(fd)
+				if !rok || !resp.starts_with('OK') {
+					eprintln('sb ctl: ${resp}')
+					C._exit(1)
+				}
+				println(resp)
+				exit(0)
+			}
+			if want_up {
+				cand_arg := if cands.len > 0 { ':${cands.join(',')}' } else { '' }
+				write_str(fd, 'BH:UP${cand_arg}\n')
+				resp, rok := read_line(fd)
+				C.close(fd)
+				if !rok || !resp.starts_with('OK') {
+					eprintln('sb ctl: ${resp}')
+					C._exit(1)
+				}
+				println('udp backhaul renegotiation requested')
+				exit(0)
+			}
+			// Bare `bh`: fetch STATUS, print the side-channel block + usage hint.
+			write_str(fd, 'STATUS\n')
+			mut kv := map[string]string{}
+			for {
+				line, lok := read_line(fd)
+				if !lok || line == '~END' {
+					break
+				}
+				idx := line.index(':') or { continue }
+				kv[line[..idx]] = line[idx + 1..]
+			}
+			C.close(fd)
+			print_bh_section(kv)
+			println('')
+			println('usage: sb ctl bh [--up [ip:port ...] | --down]')
+			println('  --up    (re)negotiate the UDP backhaul (extra args are manual mux candidates,')
+			println('          bypassing STUN when it cannot find a public address)')
+			println('  --down  force a lossless revert to in-band')
 			exit(0)
 		}
 		'kill' {
@@ -1663,7 +1709,7 @@ fn run_ctl(args []string) {
 		}
 		else {
 			C.close(fd)
-			die('usage: sb ctl [-v] [status | udpup [ip:port,...] | udpdn | kill {all|relays|ports|rpcs|<pid>} [--match=X]]')
+			die('usage: sb ctl [-v] [status | bh [--up [ip:port ...] | --down] | kill {all|relays|ports|rpcs|<pid>} [--match=X]]')
 		}
 	}
 	C._exit(0) // unreachable; satisfies @[noreturn] checker
@@ -4348,13 +4394,13 @@ fn main() {
 					run_survey()
 				}
 				else {
-					die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|hop <cmd...>|ctl [-v|status|udpup|udpdn|kill]|clip [--copy|--paste]|survey}')
+					die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|hop <cmd...>|ctl [-v|status|bh|kill]|clip [--copy|--paste]|survey}')
 				}
 			}
 		}
 		// Bare `sb` has no action -- `sb hop <cmd>` carries the tooling to the
 		// next hop.
-		die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|hop <cmd...>|ctl [-v|status|udpup|udpdn|kill]|clip [--copy|--paste]|survey}')
+		die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|hop <cmd...>|ctl [-v|status|bh|kill]|clip [--copy|--paste]|survey}')
 	}
 	// Invoked via a PATH symlink (argv[0] != sb): dispatch that tool.
 	run_tool(prog, os.args[1..].clone())

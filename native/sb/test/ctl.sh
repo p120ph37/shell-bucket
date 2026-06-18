@@ -1,6 +1,7 @@
 # Self-tests for `sb ctl` (control/status) against the __muxserve stub.
 # Exercises the STATUS wire protocol, the pretty-printed output shape, the
-# udpup/udpdn backhaul verbs, and the -v / kill component inventory -- all over
+# `bh` backhaul verb (--up/--down, bare state readout, `backhaul` alias), and the
+# -v / kill component inventory -- all over
 # the real bearer-auth socket handshake.
 B=/b/sb
 T="cccccc:secret3secret3secret3cc"
@@ -35,17 +36,27 @@ echo "$outv" | grep -q "relay"                  && echo "ok:   relay row listed"
 echo "$outv" | grep -q "bind:127.0.0.1:8080"    && echo "ok:   port desc listed"     || echo "FAIL: port desc missing"
 echo "$outv" | grep -q "rpc"                     && echo "ok:   rpc row listed"       || echo "FAIL: rpc row missing"
 
-echo "=== sb ctl udpdn ==="
-SB_TOKEN=$T $B ctl udpdn >/dev/null 2>&1; rc=$?
-[ "$rc" = 0 ] && echo "ok:   ctl udpdn exit 0" || echo "FAIL: ctl udpdn rc=$rc"
+echo "=== sb ctl bh --down ==="
+SB_TOKEN=$T $B ctl bh --down >/dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && echo "ok:   ctl bh --down exit 0" || echo "FAIL: ctl bh --down rc=$rc"
 
-echo "=== sb ctl udpup ==="
-SB_TOKEN=$T $B ctl udpup >/dev/null 2>&1; rc=$?
-[ "$rc" = 0 ] && echo "ok:   ctl udpup exit 0" || echo "FAIL: ctl udpup rc=$rc"
+echo "=== sb ctl bh --up ==="
+SB_TOKEN=$T $B ctl bh --up >/dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && echo "ok:   ctl bh --up exit 0" || echo "FAIL: ctl bh --up rc=$rc"
 
-echo "=== sb ctl udpup with candidates ==="
-SB_TOKEN=$T $B ctl udpup 1.2.3.4:5678 >/dev/null 2>&1; rc=$?
-[ "$rc" = 0 ] && echo "ok:   ctl udpup with candidates exit 0" || echo "FAIL: ctl udpup rc=$rc"
+echo "=== sb ctl bh --up with candidates ==="
+SB_TOKEN=$T $B ctl bh --up 1.2.3.4:5678 >/dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && echo "ok:   ctl bh --up with candidates exit 0" || echo "FAIL: ctl bh --up rc=$rc"
+
+echo "=== sb ctl bh (no flag = state + usage) ==="
+outb=$(SB_TOKEN=$T $B ctl bh 2>/dev/null); rc=$?
+[ "$rc" = 0 ] && echo "ok:   bare bh exit 0"               || echo "FAIL: bare bh rc=$rc"
+echo "$outb" | grep -q "Side-channel" && echo "ok:   bare bh prints state"  || echo "FAIL: bare bh state missing"
+echo "$outb" | grep -q "usage:"       && echo "ok:   bare bh prints usage"  || echo "FAIL: bare bh usage missing"
+
+echo "=== sb ctl backhaul alias ==="
+SB_TOKEN=$T $B ctl backhaul --down >/dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && echo "ok:   backhaul alias works" || echo "FAIL: backhaul alias rc=$rc"
 
 echo "=== sb ctl kill <sel> ==="
 outk=$(SB_TOKEN=$T $B ctl kill rpcs 2>/dev/null); rc=$?

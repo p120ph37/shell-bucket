@@ -186,19 +186,21 @@ be available. If no clipboard tool is found, `sb clip` exits with an error.
 From a running remote shell, `sb ctl` (alias: `sb control`) queries and controls the
 running mux via its side-band socket (`$SB_TOKEN` must be set):
 
-`sb ctl` is the general runtime-control namespace; backhaul verbs are prefixed
-`udp` so they read clearly alongside the component-management verbs.
+`sb ctl` is the general runtime-control namespace. Backhaul operations live
+under their own verb (`bh`, alias `backhaul`) so they read clearly alongside the
+component-management verbs.
 
 | command | effect |
 |---|---|
 | `sb ctl` / `sb ctl status` | print session stats: in-band byte counts, PTY throughput, UDP backhaul state + IPs, relay/port/rpc counts |
 | `sb ctl -v` | as `status`, plus a per-component listing: each relay, port, and rpc with its PID, category, and description |
-| `sb ctl udpup [ip:port,...]` | ask the wrapper to (re)negotiate the UDP backhaul (bypasses the one-shot auto-reneg guard); optional CSV of manual mux candidates bypasses STUN |
-| `sb ctl udpdn` (alias `udpdown`) | force a lossless UDP backhaul revert to in-band |
+| `sb ctl bh` (alias `backhaul`) | print just the UDP backhaul's state + a usage hint -- no action |
+| `sb ctl bh --up [ip:port ...]` | ask the wrapper to (re)negotiate the UDP backhaul (bypasses the one-shot auto-reneg guard); optional space-separated `ip:port` args are manual mux candidates that bypass STUN |
+| `sb ctl bh --down` | force a lossless UDP backhaul revert to in-band |
 | `sb ctl kill {all\|relays\|ports\|rpcs\|<pid>} [--match=X]` | stop session components (see below) |
 | `sb ctl kill` | with no selector: print usage and the `-v` listing of killable components |
 
-`udpup` is useful when roaming killed the UDP path after the automatic one-shot
+`bh --up` is useful when roaming killed the UDP path after the automatic one-shot
 renegotiation was already spent, or when STUN can't discover the mux's public
 address (e.g. symmetric NAT) and you know it manually.
 

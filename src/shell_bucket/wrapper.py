@@ -734,7 +734,7 @@ async def _bridge_stdio(
                 tm.on_peer_revert(int(ev[6:]))  # mux reverting -> lossless in-band handoff
             return
         if tm is not None and ev == b"UP:RENEG":
-            # Mux-initiated renegotiation (e.g. `sb ctl udpup`): force a fresh offer
+            # Mux-initiated renegotiation (e.g. `sb ctl bh --up`): force a fresh offer
             # regardless of the one-shot auto-reneg guard so the operator can always
             # restore the UDP path manually.
             tm._reneg_used = False
