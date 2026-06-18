@@ -1,4 +1,11 @@
-"""asyncssh-based SSH wrapper with pty bridging."""
+"""Transport-agnostic tty wrapper: bridges a byte stream to/from a remote shell.
+
+The wrapper knows nothing about how the session is carried — SSH, ECS Execute
+Command, a local shell, a serial console — it just bridges stdio to a `Process`
+that owns a terminal at the far end. Producing that process from a user-named
+command is `transport.CommandTransport`'s job; everything here (the in-band
+bootstrap server, tunnels, the UDP backhaul) rides whatever tty it's given.
+"""
 
 from __future__ import annotations
 
@@ -14,12 +21,8 @@ import sys
 import termios
 import tty
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractAsyncContextManager, contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
-
-import asyncssh
 
 from shell_bucket.apc_filter import APCFilter, apc_envelope
 from shell_bucket.backhaul import (
@@ -33,7 +36,6 @@ from shell_bucket.backhaul import (
 )
 from shell_bucket.config import ClipConfig, TmuxConfig
 from shell_bucket.file_delivery import Bucket, encode_for_delivery, parse_filereq
-from shell_bucket.known_hosts import TOFUStore
 from shell_bucket.lazy_alias import (
     SHELL_FAMILIES,
     build_bootstrap,
@@ -50,6 +52,7 @@ from shell_bucket.mux_frame import (
     parse_surveyreply,
 )
 from shell_bucket.topology import Topology
+from shell_bucket.transport import Process, terminal_size as _terminal_size
 
 # A `SURVEY:<id>` reply (`SURVEYR:…`) is recorded into the topology, never replied to.
 
@@ -76,58 +79,6 @@ def regenerate_runtimes(bucket: Bucket) -> None:
     bucket.write_manifest()
 
 
-class _ShellBucketSSHClient(asyncssh.SSHClient):
-    """SSHClient that delegates host-key validation to a TOFUStore (or accepts all)."""
-
-    def __init__(self, store: TOFUStore | None) -> None:
-        super().__init__()
-        self._store = store
-
-    def validate_host_public_key(
-        self, host: str, addr: str, port: int, key: asyncssh.SSHKey
-    ) -> bool:
-        if self._store is None:
-            # --no-known-hosts: accept anything, record nothing.
-            return True
-        return self._store.validate(host, key)
-
-
-def build_connect_kwargs(
-    *,
-    host: str,
-    user: str,
-    password: str | None,
-    identity_file: Path | None,
-    store: TOFUStore | None,
-    port: int | None = None,
-) -> dict[str, Any]:
-    """Pure construction of asyncssh.connect kwargs — extracted for unit testing."""
-    kwargs: dict[str, Any] = {
-        "host": host,
-        "username": user,
-        "client_factory": lambda: _ShellBucketSSHClient(store),
-        # Prefer zlib over none — asyncssh defaults offer both but list `none`
-        # first, which makes the server pick no compression. SSH negotiation
-        # is client-order-wins, so put compression first explicitly. Falls back
-        # to `none` if the server doesn't accept zlib.
-        "compression_algs": ("zlib@openssh.com", "zlib", "none"),
-    }
-    if store is None:
-        # --no-known-hosts: asyncssh skips host-key validation entirely.
-        kwargs["known_hosts"] = None
-    else:
-        # TOFU: empty trusted/CA/revoked sets force asyncssh to consult our
-        # _ShellBucketSSHClient.validate_host_public_key callback.
-        kwargs["known_hosts"] = ([], [], [])
-    if port is not None:
-        kwargs["port"] = port
-    if password is not None:
-        kwargs["password"] = password
-    if identity_file is not None:
-        kwargs["client_keys"] = [str(identity_file)]
-    return kwargs
-
-
 @contextmanager
 def _raw_terminal_mode(fd: int) -> Iterator[None]:
     if not os.isatty(fd):
@@ -139,14 +90,6 @@ def _raw_terminal_mode(fd: int) -> Iterator[None]:
         yield
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-
-def _terminal_size() -> tuple[int, int]:
-    try:
-        s = os.get_terminal_size()
-        return s.columns, s.lines
-    except OSError:
-        return 80, 24
 
 
 def _session_script(
@@ -689,7 +632,7 @@ class TransportManager:
 
 
 async def _bridge_stdio(
-    proc: asyncssh.SSHClientProcess,
+    proc: Process,
     server: BootstrapServer | None = None,
     initial: bytes = b"",
     *,
@@ -874,7 +817,7 @@ async def _bridge_stdio(
 
 
 async def _feed_and_sync(
-    proc: asyncssh.SSHClientProcess,
+    proc: Process,
     script: str,
     *,
     timeout: float = 30.0,
@@ -911,29 +854,26 @@ async def _feed_and_sync(
 
 
 async def run_session(
+    transport: AbstractAsyncContextManager[Process],
     *,
-    user: str,
-    host: str,
-    password: str | None,
-    identity_file: Path | None,
-    store: TOFUStore | None,
     bucket: Bucket | None = None,
     shell: str = "bash",
     tmux_session: str | None = None,
     tmux_config: TmuxConfig | None = None,
     clip_config: ClipConfig | None = None,
-    port: int | None = None,
 ) -> int:
-    """Connect, run interactive shell, bridge stdio, return remote exit code.
+    """Run the wrapped tty tool, bring our tooling up over it, bridge, return rc.
 
-    Brings `shell` up under the multiplexer by **injecting** hop 1: it opens an
-    ordinary login shell and feeds the session script over its stdin
-    (transport-agnostic, POSIX — no `<(…)`/argv escaping), exactly as `sb inject`
-    does for deeper hops. The script is the plain bootstrap, or — for `--tmux` — the
-    tmux-resolving prologue (which brings tmux up with `sb mux` as the pane command).
-    It fetches the sb binary and `exec`s the multiplexer (or tmux), whose in-band
-    requests a `BootstrapServer` answers from the `bucket`. If `bucket` is None, a
-    plain interactive shell runs.
+    `transport` is any async-context-manager yielding a `Process` that owns a
+    terminal at the far end — `transport.CommandTransport(["ssh", "user@host"])`,
+    or the same for `aws ecs execute-command …`, `bash`, `screen`, etc. The
+    wrapper is transport-blind: it opens the process, then brings `shell` up
+    under the multiplexer by **injecting** hop 1 — feeding the session script
+    over the tty (transport-agnostic, POSIX — no `<(…)`/argv escaping), exactly
+    as `sb inject` does for deeper hops. The script is the plain bootstrap, or —
+    for `--tmux` — the tmux-resolving prologue. It fetches the sb binary and
+    `exec`s the multiplexer (or tmux), whose in-band requests a `BootstrapServer`
+    answers from the `bucket`. If `bucket` is None, a plain shell runs.
 
     The wire is token-free: the wrapper mints nothing — each `sb mux` mints
     its own per-host socket token.
@@ -942,27 +882,11 @@ async def run_session(
     if bucket is not None:
         regenerate_runtimes(bucket)
         server = BootstrapServer(bucket=bucket, clip=clip_config or ClipConfig())
-    kwargs = build_connect_kwargs(
-        host=host,
-        user=user,
-        password=password,
-        identity_file=identity_file,
-        store=store,
-        port=port,
-    )
     script = _session_script(shell, tmux_session, tmux_config) if server else None
-    async with asyncssh.connect(**kwargs) as conn:
-        cols, rows = _terminal_size()
-        # Always an interactive login shell (command=None); we feed the script.
-        async with conn.create_process(
-            None,
-            term_type=os.environ.get("TERM", "xterm-256color"),
-            term_size=(cols, rows),
-            encoding=None,
-        ) as proc:
-            initial = await _feed_and_sync(proc, script) if script else b""
-            # The UDP backhaul is opt-in (SB_UDP_BACKHAUL=1) until it has soaked;
-            # off → identical in-band behavior.
-            udp = os.environ.get("SB_UDP_BACKHAUL") == "1"
-            await _bridge_stdio(proc, server=server, initial=initial, udp_backhaul=udp)
-            return proc.returncode or 0
+    async with transport as proc:
+        initial = await _feed_and_sync(proc, script) if script else b""
+        # The UDP backhaul is opt-in (SB_UDP_BACKHAUL=1) until it has soaked;
+        # off → identical in-band behavior.
+        udp = os.environ.get("SB_UDP_BACKHAUL") == "1"
+        await _bridge_stdio(proc, server=server, initial=initial, udp_backhaul=udp)
+        return proc.returncode or 0

@@ -1,85 +1,25 @@
-"""Unit tests for the asyncssh connection wrapper (testable bits)."""
+"""Unit tests for the transport-agnostic wrapper (testable bits)."""
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
 
-import asyncssh
 import pytest
 
-from shell_bucket.file_delivery import Bucket, FileRequest, encode_for_delivery, err_delivery
-from shell_bucket.known_hosts import TOFUStore
+from shell_bucket.file_delivery import Bucket, encode_for_delivery, err_delivery
 from shell_bucket.lazy_alias import RC_MARKER, build_bootstrap, build_tmux_prologue
 from shell_bucket.config import TmuxConfig
 from shell_bucket.wrapper import (
     BootstrapServer,
     TransportManager,
-    _ShellBucketSSHClient,
     _session_script,
-    build_connect_kwargs,
     dispatch_apc_events,
     regenerate_runtimes,
 )
 
 # The wire is token-free: the wrapper holds no token and the builders /
 # envelope take none — each `sb mux` mints its own per-host socket token.
-
-
-def _pubkey() -> asyncssh.SSHKey:
-    priv = asyncssh.generate_private_key("ssh-ed25519")
-    return asyncssh.import_public_key(priv.export_public_key())
-
-
-# ───── build_connect_kwargs ────────────────────────────────────────────────
-
-def test_build_kwargs_password_auth() -> None:
-    kw = build_connect_kwargs(
-        host="h.example", user="me", password="hunter2", identity_file=None, store=None,
-    )
-    assert kw["host"] == "h.example" and kw["username"] == "me"
-    assert kw["password"] == "hunter2" and kw["known_hosts"] is None
-    assert "client_keys" not in kw and callable(kw["client_factory"])
-
-
-def test_build_kwargs_store_forces_callback(tmp_path: Path) -> None:
-    store = TOFUStore(tmp_path / "known_hosts")
-    kw = build_connect_kwargs(host="h", user="me", password="pw", identity_file=None, store=store)
-    assert kw["known_hosts"] == ([], [], [])
-
-
-def test_build_kwargs_prefers_zlib() -> None:
-    kw = build_connect_kwargs(host="h", user="me", password="pw", identity_file=None, store=None)
-    assert kw["compression_algs"][0] == "zlib@openssh.com" and "none" in kw["compression_algs"]
-
-
-def test_build_kwargs_port_and_identity(tmp_path: Path) -> None:
-    keyfile = tmp_path / "id"
-    keyfile.write_text("k")
-    kw = build_connect_kwargs(
-        host="h", user="me", password=None, identity_file=keyfile, store=None, port=2222,
-    )
-    assert kw["port"] == 2222 and kw["client_keys"] == [str(keyfile)] and "password" not in kw
-
-
-def test_build_kwargs_factory_carries_store(tmp_path: Path) -> None:
-    store = TOFUStore(tmp_path / "known_hosts")
-    kw = build_connect_kwargs(host="h", user="me", password="pw", identity_file=None, store=store)
-    client = kw["client_factory"]()
-    assert isinstance(client, _ShellBucketSSHClient) and client._store is store
-
-
-# ───── host-key validation ─────────────────────────────────────────────────
-
-def test_client_no_store_accepts_any() -> None:
-    assert _ShellBucketSSHClient(store=None).validate_host_public_key("h", "1.2.3.4", 22, _pubkey()) is True
-
-
-def test_client_store_records_then_rejects_mismatch(tmp_path: Path) -> None:
-    store = TOFUStore(tmp_path / "known_hosts")
-    client = _ShellBucketSSHClient(store=store)
-    assert client.validate_host_public_key("h", "1.2.3.4", 22, _pubkey()) is True
-    assert client.validate_host_public_key("h", "1.2.3.4", 22, _pubkey()) is False
 
 
 # ───── BootstrapServer ─────────────────────────────────────────────────────

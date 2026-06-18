@@ -10,27 +10,71 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import shutil
+from collections.abc import AsyncIterator
 from pathlib import Path
 
-import asyncssh
 import pytest
 
 from shell_bucket.apc_filter import APCFilter, apc_envelope
 from shell_bucket.config import TmuxConfig
 from shell_bucket.file_delivery import Bucket
-from shell_bucket.known_hosts import TOFUStore
 from shell_bucket.mux_frame import parse_route
 from shell_bucket.tmux_fetch import fetch_tmux
+from shell_bucket.transport import CommandTransport, Process
 from shell_bucket.wrapper import (
     BootstrapServer,
     TunnelManager,
     _feed_and_sync,
     _session_script,
-    build_connect_kwargs,
     regenerate_runtimes,
 )
 
 pytestmark = pytest.mark.integration
+
+
+def _ssh_argv(server) -> list[str]:
+    """`sshpass ssh …` argv that lands in a shell with no interactive preamble.
+
+    Password auth is the wrapped tool's concern (here `sshpass` answers it); the
+    wrapper just sees a tty that becomes a shell. Host-key prompts are disabled so
+    the very first connection is non-interactive too.
+    """
+    return [
+        "sshpass", "-p", server.password,
+        "ssh", "-tt",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR",
+        "-p", str(server.port),
+        f"{server.user}@{server.host}",
+    ]
+
+
+@contextlib.asynccontextmanager
+async def _session(
+    server,
+    script: str,
+    *,
+    clean: bool = True,
+    clean_extra: str = "",
+) -> AsyncIterator[tuple[Process, bytes]]:
+    """Wrap `ssh` under the PTY transport and inject hop 1, exactly as production.
+
+    Yields `(proc, initial)` — the bridged process and the post-BEGIN remainder.
+    With `clean`, wipes the remote cache over the tty *before* feeding the
+    bootstrap (its output is swallowed by `_feed_and_sync` along with the prompt /
+    motd up to BEGIN), so each run starts like a fresh host. `clean_extra` adds
+    paths to that wipe (e.g. a deeper hop's `$SB_CACHE`).
+    """
+    if shutil.which("sshpass") is None:
+        pytest.skip("sshpass not available (needed to wrap password-auth ssh)")
+    async with CommandTransport(_ssh_argv(server)) as proc:
+        if clean:
+            proc.stdin.write(
+                b'rm -rf "$HOME/.cache/shell-bucket" ' + clean_extra.encode() + b"\n"
+            )
+        initial = await _feed_and_sync(proc, script)
+        yield proc, initial
 
 # The colima builder is arm64, so the container runs the linux_arm64 binary.
 # Integration tests run against the INSTRUMENTED binary (dist-test/, built with
@@ -83,74 +127,15 @@ def _ensure_tmux() -> Path:
     return _TMUX
 
 
-# ───── connection-level (no bootstrap) ─────────────────────────────────────
-
-async def test_password_auth_happy_path(ssh_server) -> None:
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    async with asyncssh.connect(**kwargs) as conn:
-        assert (await conn.run("echo hello-from-test", check=True)).stdout.strip() == "hello-from-test"
-
-
-async def test_tofu_records_then_matches(ssh_server, tmp_path: Path) -> None:
-    store = TOFUStore(tmp_path / "known_hosts")
-    assert store.lookup(ssh_server.host) == []
-
-    def kwargs() -> dict:
-        return build_connect_kwargs(
-            host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-            identity_file=None, store=store, port=ssh_server.port,
-        )
-
-    async with asyncssh.connect(**kwargs()):
-        pass
-    assert len(store.lookup(ssh_server.host)) == 1
-    async with asyncssh.connect(**kwargs()) as conn:
-        assert (await conn.run("echo second", check=True)).stdout.strip() == "second"
-    assert len(store.lookup(ssh_server.host)) == 1
-
-
-async def test_tofu_rejects_after_tampering(ssh_server, tmp_path: Path) -> None:
-    kh = tmp_path / "known_hosts"
-    store = TOFUStore(kh)
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=store, port=ssh_server.port,
-    )
-    async with asyncssh.connect(**kwargs):
-        pass
-    fake = asyncssh.generate_private_key("ssh-ed25519").export_public_key().decode().strip()
-    kh.write_text(f"{ssh_server.host} {fake}\n")
-    with pytest.raises(asyncssh.Error):
-        async with asyncssh.connect(**kwargs):
-            pass
-
-
-async def test_wrong_password_raises(ssh_server) -> None:
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password="nope",
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    with pytest.raises(asyncssh.PermissionDenied):
-        async with asyncssh.connect(**kwargs):
-            pass
-
-
-async def test_compression_negotiates_non_none(ssh_server) -> None:
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    async with asyncssh.connect(**kwargs) as conn:
-        assert conn._cmp_alg_cs != b"none" and conn._cmp_alg_sc != b"none"
-
-
 # ───── bootstrap + sb end-to-end ──────────────────────────────────────────
+#
+# Connection-level concerns (auth, host-key trust, compression) now belong to the
+# wrapped tool (here `sshpass ssh`), not to shell-bucket, so there are no
+# wrapper-side tests for them — the bootstrap/end-to-end tests below exercise the
+# transport by simply getting a shell through it.
 
 async def _drive(
-    proc: asyncssh.SSHClientProcess,
+    proc: Process,
     server: BootstrapServer,
     *,
     expect: bytes,
@@ -208,26 +193,15 @@ async def _drive(
 async def _run_bootstrap(
     ssh_server, bucket: Bucket, *, expect: bytes, send: bytes
 ) -> tuple[bytes, list[bytes]]:
+    # The ssh_server fixture is session-scoped, so tests share $HOME and thus
+    # ~/.cache/shell-bucket. `_session(clean=True)` clears it so each test starts
+    # like a fresh host — otherwise a same-second sb.rc mtime can make
+    # If-Modified-Since reuse a prior test's cached runtime (mtime collision).
     server = BootstrapServer(bucket=bucket)
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    async with asyncssh.connect(**kwargs) as conn:
-        # The ssh_server fixture is session-scoped, so tests share $HOME and thus
-        # ~/.cache/shell-bucket. Clear it so each test starts like a fresh host —
-        # otherwise a same-second sb.rc mtime can make If-Modified-Since reuse a
-        # prior test's cached runtime (mtime-granularity collision).
-        await conn.run('rm -rf "$HOME/.cache/shell-bucket"')
-        # Inject hop 1: open a plain login shell and feed the bootstrap (no embed
-        # launch, no `<(…)`), exactly as the wrapper does in production.
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc:
-            initial = await _feed_and_sync(proc, _session_script("bash"))
-            return await _drive(
-                proc, server, expect=expect, send_after_rc=send, initial=initial
-            )
+    async with _session(ssh_server, _session_script("bash")) as (proc, initial):
+        return await _drive(
+            proc, server, expect=expect, send_after_rc=send, initial=initial
+        )
 
 
 async def test_sb_bootstrap_runs_lazy_helper_end_to_end(ssh_server, tmp_path: Path) -> None:
@@ -377,7 +351,7 @@ async def test_mux_socket_framed_origin_reframes(ssh_server, tmp_path: Path) -> 
 # ───── SURVEY → topology ───────────────────────────────────────────────
 
 async def _drive_survey(
-    proc: asyncssh.SSHClientProcess,
+    proc: Process,
     server: BootstrapServer,
     *,
     want_routes: int,
@@ -437,17 +411,8 @@ async def test_survey_single_hop(ssh_server, tmp_path: Path) -> None:
     Proves the SURVEY round-trip + topology rebuild on a one-node tree."""
     bucket = _make_bucket(tmp_path, {})
     server = BootstrapServer(bucket=bucket)
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    async with asyncssh.connect(**kwargs) as conn:
-        await conn.run('rm -rf "$HOME/.cache/shell-bucket"')
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc:
-            initial = await _feed_and_sync(proc, _session_script("bash"))
-            await _drive_survey(proc, server, want_routes=1, initial=initial)
+    async with _session(ssh_server, _session_script("bash")) as (proc, initial):
+        await _drive_survey(proc, server, want_routes=1, initial=initial)
     assert server.topology.routes() == [()]  # one node, the top mux, empty route
     node = server.topology.nodes()[0]
     assert node.depth == 1 and node.fields.get("arch")  # identity came back
@@ -460,23 +425,16 @@ async def test_survey_two_hop_routes(ssh_server, tmp_path: Path) -> None:
     cid as it relayed the reply up). Proves fan-out + route accumulation."""
     bucket = _make_bucket(tmp_path, {})
     server = BootstrapServer(bucket=bucket)
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
     deeper = (
         b"mkdir -p /tmp/sbsurv && "
         b"sb inject env SB_CACHE=/tmp/sbsurv/cache bash\n"
     )
-    async with asyncssh.connect(**kwargs) as conn:
-        await conn.run('rm -rf "$HOME/.cache/shell-bucket" /tmp/sbsurv')
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc:
-            initial = await _feed_and_sync(proc, _session_script("bash"))
-            await _drive_survey(
-                proc, server, want_routes=2, initial=initial, deeper_send=deeper
-            )
+    async with _session(
+        ssh_server, _session_script("bash"), clean_extra="/tmp/sbsurv"
+    ) as (proc, initial):
+        await _drive_survey(
+            proc, server, want_routes=2, initial=initial, deeper_send=deeper
+        )
     routes = server.topology.routes()
     assert () in routes, routes  # the host mux
     assert any(len(r) == 1 for r in routes), routes  # the deeper mux, via one conduit cid
@@ -489,10 +447,6 @@ async def test_push_single_hop_ping(ssh_server, tmp_path: Path) -> None:
     local-act + the PUSHR return, on a one-node tree."""
     bucket = _make_bucket(tmp_path, {})
     server = BootstrapServer(bucket=bucket)
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
     apc = APCFilter()
     pushed = False
 
@@ -517,18 +471,13 @@ async def test_push_single_hop_ping(ssh_server, tmp_path: Path) -> None:
             if 1 in server.pushes:
                 return
 
-    async with asyncssh.connect(**kwargs) as conn:
-        await conn.run('rm -rf "$HOME/.cache/shell-bucket"')
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc:
-            initial = await _feed_and_sync(proc, _session_script("bash"))
-            apc.feed(initial)  # process any post-BEGIN remainder first
-            try:
-                await asyncio.wait_for(pump(proc), 45.0)
-            finally:
-                with contextlib.suppress(Exception):
-                    proc.stdin.write(b"exit\n")
+    async with _session(ssh_server, _session_script("bash")) as (proc, initial):
+        apc.feed(initial)  # process any post-BEGIN remainder first
+        try:
+            await asyncio.wait_for(pump(proc), 45.0)
+        finally:
+            with contextlib.suppress(Exception):
+                proc.stdin.write(b"exit\n")
     assert server.pushes.get(1, b"").startswith(b"PONG:host="), server.pushes
 
 
@@ -540,10 +489,6 @@ async def test_push_two_hop_addresses_deeper(ssh_server, tmp_path: Path) -> None
     addressed the right node down the tree."""
     bucket = _make_bucket(tmp_path, {})
     server = BootstrapServer(bucket=bucket)
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
     deeper = (
         b"mkdir -p /tmp/sbpush && "
         b"sb inject env SB_CACHE=/tmp/sbpush/cache bash\n"
@@ -586,18 +531,15 @@ async def test_push_two_hop_addresses_deeper(ssh_server, tmp_path: Path) -> None
             if 2 in server.pushes:
                 return
 
-    async with asyncssh.connect(**kwargs) as conn:
-        await conn.run('rm -rf "$HOME/.cache/shell-bucket" /tmp/sbpush')
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc:
-            initial = await _feed_and_sync(proc, _session_script("bash"))
-            apc.feed(initial)
-            try:
-                await asyncio.wait_for(pump(proc), 120.0)
-            finally:
-                with contextlib.suppress(Exception):
-                    proc.stdin.write(b"exit\nexit\n")
+    async with _session(
+        ssh_server, _session_script("bash"), clean_extra="/tmp/sbpush"
+    ) as (proc, initial):
+        apc.feed(initial)
+        try:
+            await asyncio.wait_for(pump(proc), 120.0)
+        finally:
+            with contextlib.suppress(Exception):
+                proc.stdin.write(b"exit\nexit\n")
     reply = server.pushes.get(2, b"")
     assert reply.startswith(b"PONG:"), (reply, server.pushes)
     # The reply identity is the DEEPER node's, not the host mux's (distinct pid).
@@ -619,7 +561,7 @@ async def test_push_two_hop_addresses_deeper(ssh_server, tmp_path: Path) -> None
 
 
 async def _drive_conduit(
-    proc: asyncssh.SSHClientProcess,
+    proc: Process,
     server: BootstrapServer,
     *,
     deeper_send: bytes,
@@ -684,21 +626,14 @@ async def test_conduit_multi_hop_label_swap(ssh_server, tmp_path: Path) -> None:
     run …` — is the same code; the fresh `$SB_CACHE` makes the fetches deterministic.)"""
     bucket = _make_bucket(tmp_path, {})
     server = BootstrapServer(bucket=bucket)
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
     deeper = (
         b"mkdir -p /tmp/sbdeep && "
         b"sb inject env SB_CACHE=/tmp/sbdeep/cache bash\n"
     )
-    async with asyncssh.connect(**kwargs) as conn:
-        await conn.run('rm -rf "$HOME/.cache/shell-bucket" /tmp/sbdeep')
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc:
-            initial = await _feed_and_sync(proc, _session_script("bash"))
-            seen = await _drive_conduit(proc, server, deeper_send=deeper, initial=initial)
+    async with _session(
+        ssh_server, _session_script("bash"), clean_extra="/tmp/sbdeep"
+    ) as (proc, initial):
+        seen = await _drive_conduit(proc, server, deeper_send=deeper, initial=initial)
     # The deeper host's sb-binary AND runtime fetches both arrived conduit-relayed,
     # label-swap re-framed by the host mux (`R<id>:…`). Each prior response had to
     # route back through the conduit for the deeper bootstrap to reach the next step,
@@ -722,16 +657,11 @@ async def test_tmux_fetched_in_band_then_launches(ssh_server, tmp_path: Path) ->
     server = BootstrapServer(bucket=bucket)
     cfg = TmuxConfig(prefer_system=False, fetch_if_missing=True, fallback_without=False)
     script = _session_script("bash", tmux_session="sbtest", tmux_config=cfg)
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
     apc = APCFilter()
     out = bytearray()
     seen: list[bytes] = []
-    initial = b""
 
-    async def pump() -> None:
+    async def pump(proc, initial) -> None:
         pending = initial
         while True:
             if pending:
@@ -750,17 +680,12 @@ async def test_tmux_fetched_in_band_then_launches(ssh_server, tmp_path: Path) ->
             if b"[sbtest]" in bytes(out):  # tmux status line → session is up
                 return
 
-    async with asyncssh.connect(**kwargs) as conn:
-        await conn.run('rm -rf "$HOME/.cache/shell-bucket"')
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc:
-            initial = await _feed_and_sync(proc, script)
-            try:
-                await asyncio.wait_for(pump(), 120.0)
-            finally:
-                with contextlib.suppress(Exception):
-                    proc.stdin.write(b"\x02d")  # C-b d: detach, let the session exit cleanly
+    async with _session(ssh_server, script) as (proc, initial):
+        try:
+            await asyncio.wait_for(pump(proc, initial), 120.0)
+        finally:
+            with contextlib.suppress(Exception):
+                proc.stdin.write(b"\x02d")  # C-b d: detach, let the session exit cleanly
 
     # sb-tmux.sh resolved tmux via the bucket autoviv symlink (FILEREQ over the socket,
     # R-framed) and the manifest was already warm from mux startup.
@@ -820,33 +745,23 @@ async def test_tmux_reconnect_recovers_token(ssh_server, tmp_path: Path) -> None
     server = BootstrapServer(bucket=bucket)
     cfg = TmuxConfig(prefer_system=False)  # use the bucket tmux → deterministic
     script = _session_script("bash", tmux_session="sbrecon", tmux_config=cfg)
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    async with asyncssh.connect(**kwargs) as conn:
-        await conn.run('rm -rf "$HOME/.cache/shell-bucket"')
-        # Phase 1 — bring the session up, then detach (the tmux server daemonizes and
-        # survives; this mux exits with the connection).
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc:
-            initial = await _feed_and_sync(proc, script)
-            await _tmux_serve(proc, server, initial, until=b"[sbrecon]")
-            with contextlib.suppress(Exception):
-                proc.stdin.write(b"\x02d")  # C-b d detach
-        # Phase 2 — reconnect: a brand-new mux (fresh token) re-runs sb-tmux.sh, which
-        # recovers @sb-token and rebinds; then a pane tool must work over that socket.
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc2:
-            initial2 = await _feed_and_sync(proc2, script)
-            out2, seen2 = await _tmux_serve(
-                proc2, server, initial2,
-                until=b"RECON_OK", on_marker=b"[sbrecon]", send=b"sbrecon\n",
-            )
-            with contextlib.suppress(Exception):
-                proc2.stdin.write(b"\x02d")
+    # Phase 1 — bring the session up, then detach (the tmux server daemonizes and
+    # survives; this mux exits when its ssh session closes). Each phase is its own
+    # `ssh` under the transport; $HOME (and the tmux server) persist between them.
+    async with _session(ssh_server, script) as (proc, initial):
+        await _tmux_serve(proc, server, initial, until=b"[sbrecon]")
+        with contextlib.suppress(Exception):
+            proc.stdin.write(b"\x02d")  # C-b d detach
+    # Phase 2 — reconnect: a brand-new mux (fresh token) re-runs sb-tmux.sh, which
+    # recovers @sb-token and rebinds; then a pane tool must work over that socket.
+    # `clean=False`: keep the surviving server + its cache from phase 1.
+    async with _session(ssh_server, script, clean=False) as (proc2, initial2):
+        out2, seen2 = await _tmux_serve(
+            proc2, server, initial2,
+            until=b"RECON_OK", on_marker=b"[sbrecon]", send=b"sbrecon\n",
+        )
+        with contextlib.suppress(Exception):
+            proc2.stdin.write(b"\x02d")
     assert b"RECON_OK" in out2  # a re-attached pane's tool ran…
     # …and it rode the rebound socket (R-framed = relayed up by the reconnected mux),
     # which is only possible if the new mux adopted the recovered token.
@@ -872,58 +787,48 @@ async def test_tunnel_connect_roundtrips(ssh_server, tmp_path: Path) -> None:
 
     dest = await asyncio.start_server(dest_handler, "127.0.0.1", 0)
     port = dest.sockets[0].getsockname()[1]
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    async with dest:
-        async with asyncssh.connect(**kwargs) as conn:
-            await conn.run('rm -rf "$HOME/.cache/shell-bucket"')
-            async with conn.create_process(
-                None, term_type="xterm", term_size=(80, 24), encoding=None
-            ) as proc:
-                initial = await _feed_and_sync(proc, _session_script("bash"))
-                apc = APCFilter()
-                out = bytearray()
-                tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
-                sent = False
+    async with dest, _session(ssh_server, _session_script("bash")) as (proc, initial):
+        apc = APCFilter()
+        out = bytearray()
+        tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
+        sent = False
 
-                async def pump() -> None:
-                    nonlocal sent
-                    pending = initial
-                    while True:
-                        if pending:
-                            data, pending = pending, b""
-                        else:
-                            data = await proc.stdout.read(4096)
-                            if not data:
-                                return
-                        forwarded, events = apc.feed(data)
-                        out.extend(forwarded)
-                        for ev in events:
-                            framed = parse_route(ev)
-                            if framed is not None and (
-                                framed[0] in tunnels or framed[1].startswith(b"TUN:")
-                            ):
-                                tunnels.handle(*framed)
-                                continue
-                            resp = server.serve(ev)
-                            if resp is not None:
-                                proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
-                            if ev.startswith(b"FILEREQ:sb-bash.rc") and not sent:
-                                sent = True
-                                proc.stdin.write(
-                                    b"echo TUNPING | sb tunnel connect 127.0.0.1:%d\n" % port
-                                )
-                        if b"GOT:TUNPING" in bytes(out):
-                            return
+        async def pump() -> None:
+            nonlocal sent
+            pending = initial
+            while True:
+                if pending:
+                    data, pending = pending, b""
+                else:
+                    data = await proc.stdout.read(4096)
+                    if not data:
+                        return
+                forwarded, events = apc.feed(data)
+                out.extend(forwarded)
+                for ev in events:
+                    framed = parse_route(ev)
+                    if framed is not None and (
+                        framed[0] in tunnels or framed[1].startswith(b"TUN:")
+                    ):
+                        tunnels.handle(*framed)
+                        continue
+                    resp = server.serve(ev)
+                    if resp is not None:
+                        proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
+                    if ev.startswith(b"FILEREQ:sb-bash.rc") and not sent:
+                        sent = True
+                        proc.stdin.write(
+                            b"echo TUNPING | sb tunnel connect 127.0.0.1:%d\n" % port
+                        )
+                if b"GOT:TUNPING" in bytes(out):
+                    return
 
-                try:
-                    await asyncio.wait_for(pump(), 60.0)
-                finally:
-                    tunnels.close_all()
-                    with contextlib.suppress(Exception):
-                        proc.stdin.write(b"exit\n")
+        try:
+            await asyncio.wait_for(pump(), 60.0)
+        finally:
+            tunnels.close_all()
+            with contextlib.suppress(Exception):
+                proc.stdin.write(b"exit\n")
     assert b"GOT:TUNPING" in bytes(out), bytes(out)[-400:]
 
 
@@ -941,78 +846,69 @@ async def test_tunnel_listen_roundtrips(ssh_server, tmp_path: Path) -> None:
     probe.bind(("127.0.0.1", 0))
     port = probe.getsockname()[1]
     probe.close()  # the wrapper (this process) will bind it via the bind tunnel
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    async with asyncssh.connect(**kwargs) as conn:
-        await conn.run('rm -rf "$HOME/.cache/shell-bucket"')
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc:
-            initial = await _feed_and_sync(proc, _session_script("bash"))
-            apc = APCFilter()
-            out = bytearray()
-            tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
-            done = asyncio.Event()
-            result: dict[str, bytes] = {}
-            sent = False
+    async with _session(ssh_server, _session_script("bash")) as (proc, initial):
+        apc = APCFilter()
+        out = bytearray()
+        tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
+        done = asyncio.Event()
+        result: dict[str, bytes] = {}
+        sent = False
 
-            async def pump() -> None:
-                nonlocal sent
-                pending = initial
-                while not done.is_set():
-                    if pending:
-                        data, pending = pending, b""
-                    else:
-                        data = await proc.stdout.read(4096)
-                        if not data:
-                            return
-                    forwarded, events = apc.feed(data)
-                    out.extend(forwarded)
-                    for ev in events:
-                        framed = parse_route(ev)
-                        if framed is not None and (
-                            framed[0] in tunnels or framed[1].startswith(b"TUN:")
-                        ):
-                            tunnels.handle(*framed)
-                            continue
-                        resp = server.serve(ev)
-                        if resp is not None:
-                            proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
-                        if ev.startswith(b"FILEREQ:sb-bash.rc") and not sent:
-                            sent = True
-                            proc.stdin.write(
-                                b"printf TUNRESP | sb tunnel listen %d\n" % port
-                            )
-
-            async def client() -> None:
-                for _ in range(300):  # wait for the wrapper to bind the listener
-                    if done.is_set():
+        async def pump() -> None:
+            nonlocal sent
+            pending = initial
+            while not done.is_set():
+                if pending:
+                    data, pending = pending, b""
+                else:
+                    data = await proc.stdout.read(4096)
+                    if not data:
                         return
-                    try:
-                        reader, writer = await asyncio.open_connection("127.0.0.1", port)
-                    except OSError:
-                        await asyncio.sleep(0.05)
+                forwarded, events = apc.feed(data)
+                out.extend(forwarded)
+                for ev in events:
+                    framed = parse_route(ev)
+                    if framed is not None and (
+                        framed[0] in tunnels or framed[1].startswith(b"TUN:")
+                    ):
+                        tunnels.handle(*framed)
                         continue
-                    writer.write(b"PING\n")
-                    await writer.drain()
-                    result["recv"] = await asyncio.wait_for(reader.read(100), 15)
-                    writer.close()
-                    done.set()
-                    return
+                    resp = server.serve(ev)
+                    if resp is not None:
+                        proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
+                    if ev.startswith(b"FILEREQ:sb-bash.rc") and not sent:
+                        sent = True
+                        proc.stdin.write(
+                            b"printf TUNRESP | sb tunnel listen %d\n" % port
+                        )
 
-            pt = asyncio.create_task(pump())
-            try:
-                await asyncio.wait_for(client(), 70)
-            finally:
+        async def client() -> None:
+            for _ in range(300):  # wait for the wrapper to bind the listener
+                if done.is_set():
+                    return
+                try:
+                    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                except OSError:
+                    await asyncio.sleep(0.05)
+                    continue
+                writer.write(b"PING\n")
+                await writer.drain()
+                result["recv"] = await asyncio.wait_for(reader.read(100), 15)
+                writer.close()
                 done.set()
-                tunnels.close_all()
-                pt.cancel()
-                with contextlib.suppress(Exception, asyncio.CancelledError):
-                    await pt
-                with contextlib.suppress(Exception):
-                    proc.stdin.write(b"\x03")  # interrupt sb tunnel
+                return
+
+        pt = asyncio.create_task(pump())
+        try:
+            await asyncio.wait_for(client(), 70)
+        finally:
+            done.set()
+            tunnels.close_all()
+            pt.cancel()
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await pt
+            with contextlib.suppress(Exception):
+                proc.stdin.write(b"\x03")  # interrupt sb tunnel
     assert result.get("recv", b"").startswith(b"TUNRESP"), (result, bytes(out)[-200:])
 
 
@@ -1030,76 +926,67 @@ async def test_tunnel_export_roundtrips(ssh_server, tmp_path: Path) -> None:
     probe.bind(("127.0.0.1", 0))
     port = probe.getsockname()[1]
     probe.close()  # the wrapper (this process) will bind it via the export tunnel
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    async with asyncssh.connect(**kwargs) as conn:
-        await conn.run('rm -rf "$HOME/.cache/shell-bucket"')
-        async with conn.create_process(
-            None, term_type="xterm", term_size=(80, 24), encoding=None
-        ) as proc:
-            initial = await _feed_and_sync(proc, _session_script("bash"))
-            apc = APCFilter()
-            out = bytearray()
-            tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
-            done = asyncio.Event()
-            result: dict[str, bytes] = {}
-            sent = False
+    async with _session(ssh_server, _session_script("bash")) as (proc, initial):
+        apc = APCFilter()
+        out = bytearray()
+        tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
+        done = asyncio.Event()
+        result: dict[str, bytes] = {}
+        sent = False
 
-            async def pump() -> None:
-                nonlocal sent
-                pending = initial
-                while not done.is_set():
-                    if pending:
-                        data, pending = pending, b""
-                    else:
-                        data = await proc.stdout.read(4096)
-                        if not data:
-                            return
-                    forwarded, events = apc.feed(data)
-                    out.extend(forwarded)
-                    for ev in events:
-                        framed = parse_route(ev)
-                        if framed is not None and (
-                            framed[0] in tunnels or framed[1].startswith(b"TUN:")
-                        ):
-                            tunnels.handle(*framed)
-                            continue
-                        resp = server.serve(ev)
-                        if resp is not None:
-                            proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
-                        if ev.startswith(b"FILEREQ:sb-bash.rc") and not sent:
-                            sent = True
-                            proc.stdin.write(
-                                b"sb tunnel export %d 127.0.0.1:2222\n" % port
-                            )
-
-            async def client() -> None:
-                for _ in range(300):  # wait for the wrapper to bind the listener
-                    if done.is_set():
+        async def pump() -> None:
+            nonlocal sent
+            pending = initial
+            while not done.is_set():
+                if pending:
+                    data, pending = pending, b""
+                else:
+                    data = await proc.stdout.read(4096)
+                    if not data:
                         return
-                    try:
-                        reader, writer = await asyncio.open_connection("127.0.0.1", port)
-                    except OSError:
-                        await asyncio.sleep(0.05)
+                forwarded, events = apc.feed(data)
+                out.extend(forwarded)
+                for ev in events:
+                    framed = parse_route(ev)
+                    if framed is not None and (
+                        framed[0] in tunnels or framed[1].startswith(b"TUN:")
+                    ):
+                        tunnels.handle(*framed)
                         continue
-                    result["recv"] = await asyncio.wait_for(reader.read(100), 15)
-                    writer.close()
-                    done.set()
-                    return
+                    resp = server.serve(ev)
+                    if resp is not None:
+                        proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
+                    if ev.startswith(b"FILEREQ:sb-bash.rc") and not sent:
+                        sent = True
+                        proc.stdin.write(
+                            b"sb tunnel export %d 127.0.0.1:2222\n" % port
+                        )
 
-            pt = asyncio.create_task(pump())
-            try:
-                await asyncio.wait_for(client(), 70)
-            finally:
+        async def client() -> None:
+            for _ in range(300):  # wait for the wrapper to bind the listener
+                if done.is_set():
+                    return
+                try:
+                    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                except OSError:
+                    await asyncio.sleep(0.05)
+                    continue
+                result["recv"] = await asyncio.wait_for(reader.read(100), 15)
+                writer.close()
                 done.set()
-                tunnels.close_all()
-                pt.cancel()
-                with contextlib.suppress(Exception, asyncio.CancelledError):
-                    await pt
-                with contextlib.suppress(Exception):
-                    proc.stdin.write(b"\x03")  # interrupt sb tunnel
+                return
+
+        pt = asyncio.create_task(pump())
+        try:
+            await asyncio.wait_for(client(), 70)
+        finally:
+            done.set()
+            tunnels.close_all()
+            pt.cancel()
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await pt
+            with contextlib.suppress(Exception):
+                proc.stdin.write(b"\x03")  # interrupt sb tunnel
     assert result.get("recv", b"").startswith(b"SSH-"), (result, bytes(out)[-200:])
 
 
@@ -1121,64 +1008,54 @@ async def test_tunnel_import_roundtrips(ssh_server, tmp_path: Path) -> None:
     dest = await asyncio.start_server(dest_handler, "127.0.0.1", 0)
     hport = dest.sockets[0].getsockname()[1]
     cport = 29137  # the remote's listener (fresh container, no conflict)
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    async with dest:
-        async with asyncssh.connect(**kwargs) as conn:
-            await conn.run('rm -rf "$HOME/.cache/shell-bucket"')
-            async with conn.create_process(
-                None, term_type="xterm", term_size=(80, 24), encoding=None
-            ) as proc:
-                initial = await _feed_and_sync(proc, _session_script("bash"))
-                apc = APCFilter()
-                out = bytearray()
-                tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
-                sent = False
+    async with dest, _session(ssh_server, _session_script("bash")) as (proc, initial):
+        apc = APCFilter()
+        out = bytearray()
+        tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
+        sent = False
 
-                async def pump() -> None:
-                    nonlocal sent
-                    pending = initial
-                    while True:
-                        if pending:
-                            data, pending = pending, b""
-                        else:
-                            data = await proc.stdout.read(4096)
-                            if not data:
-                                return
-                        forwarded, events = apc.feed(data)
-                        out.extend(forwarded)
-                        for ev in events:
-                            framed = parse_route(ev)
-                            if framed is not None and (
-                                framed[0] in tunnels or framed[1].startswith(b"TUN:")
-                            ):
-                                tunnels.handle(*framed)
-                                continue
-                            resp = server.serve(ev)
-                            if resp is not None:
-                                proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
-                            if ev.startswith(b"FILEREQ:sb-bash.rc") and not sent:
-                                sent = True
-                                # remote binds cport; wrapper dials the host line server.
-                                # `& sleep` lets the listener come up before the client.
-                                proc.stdin.write(
-                                    b"sb tunnel import %d 127.0.0.1:%d & sleep 0.5; "
-                                    b"exec 3<>/dev/tcp/127.0.0.1/%d; "
-                                    b"printf 'TUNPING\\n' >&3; cat <&3\n"
-                                    % (cport, hport, cport)
-                                )
-                        if b"GOT:TUNPING" in bytes(out):
-                            return
+        async def pump() -> None:
+            nonlocal sent
+            pending = initial
+            while True:
+                if pending:
+                    data, pending = pending, b""
+                else:
+                    data = await proc.stdout.read(4096)
+                    if not data:
+                        return
+                forwarded, events = apc.feed(data)
+                out.extend(forwarded)
+                for ev in events:
+                    framed = parse_route(ev)
+                    if framed is not None and (
+                        framed[0] in tunnels or framed[1].startswith(b"TUN:")
+                    ):
+                        tunnels.handle(*framed)
+                        continue
+                    resp = server.serve(ev)
+                    if resp is not None:
+                        proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
+                    if ev.startswith(b"FILEREQ:sb-bash.rc") and not sent:
+                        sent = True
+                        # remote binds cport; wrapper dials the host line server.
+                        # `& sleep` lets the listener come up before the client.
+                        proc.stdin.write(
+                            b"sb tunnel import %d 127.0.0.1:%d & sleep 0.5; "
+                            b"exec 3<>/dev/tcp/127.0.0.1/%d; "
+                            b"printf 'TUNPING\\n' >&3; cat <&3\n"
+                            % (cport, hport, cport)
+                        )
+                if b"GOT:TUNPING" in bytes(out):
+                    return
 
-                try:
-                    await asyncio.wait_for(pump(), 60.0)
-                finally:
-                    tunnels.close_all()
-                    with contextlib.suppress(Exception):
-                        proc.stdin.write(b"\x03")
-                        proc.stdin.write(b"exit\n")
+        try:
+            await asyncio.wait_for(pump(), 60.0)
+        finally:
+            tunnels.close_all()
+            with contextlib.suppress(Exception):
+                proc.stdin.write(b"\x03")
+                proc.stdin.write(b"exit\n")
     assert b"GOT:TUNPING" in bytes(out), bytes(out)[-400:]
 
 
@@ -1199,67 +1076,59 @@ async def test_tunnel_connect_two_hop(ssh_server, tmp_path: Path) -> None:
 
     dest = await asyncio.start_server(dest_handler, "127.0.0.1", 0)
     port = dest.sockets[0].getsockname()[1]
-    kwargs = build_connect_kwargs(
-        host=ssh_server.host, user=ssh_server.user, password=ssh_server.password,
-        identity_file=None, store=None, port=ssh_server.port,
-    )
-    async with dest:
-        async with asyncssh.connect(**kwargs) as conn:
-            await conn.run('rm -rf "$HOME/.cache/shell-bucket" /tmp/sbtun')
-            async with conn.create_process(
-                None, term_type="xterm", term_size=(80, 24), encoding=None
-            ) as proc:
-                initial = await _feed_and_sync(proc, _session_script("bash"))
-                apc = APCFilter()
-                out = bytearray()
-                tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
-                injected = False
-                tunneled = False
+    async with dest, _session(
+        ssh_server, _session_script("bash"), clean_extra="/tmp/sbtun"
+    ) as (proc, initial):
+        apc = APCFilter()
+        out = bytearray()
+        tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
+        injected = False
+        tunneled = False
 
-                async def pump() -> None:
-                    nonlocal injected, tunneled
-                    pending = initial
-                    while True:
-                        if pending:
-                            data, pending = pending, b""
-                        else:
-                            data = await proc.stdout.read(4096)
-                            if not data:
-                                return
-                        forwarded, events = apc.feed(data)
-                        out.extend(forwarded)
-                        for ev in events:
-                            framed = parse_route(ev)
-                            if framed is not None and (
-                                framed[0] in tunnels or framed[1].startswith(b"TUN:")
-                            ):
-                                tunnels.handle(*framed)
-                                continue
-                            resp = server.serve(ev)
-                            if resp is not None:
-                                proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
-                            if not injected and ev.startswith(b"FILEREQ:sb-bash.rc"):
-                                injected = True  # open the deeper mux via a conduit
-                                proc.stdin.write(
-                                    b"mkdir -p /tmp/sbtun && "
-                                    b"sb inject env SB_CACHE=/tmp/sbtun/cache bash\n"
-                                )
-                            elif (
-                                not tunneled
-                                and ev.startswith(b"R")
-                                and b"FILEREQ:sb-bash.rc" in ev
-                            ):
-                                tunneled = True  # deeper mux is up → tunnel from it
-                                proc.stdin.write(
-                                    b"echo TUNPING | sb tunnel connect 127.0.0.1:%d\n" % port
-                                )
-                        if b"GOT:TUNPING" in bytes(out):
-                            return
+        async def pump() -> None:
+            nonlocal injected, tunneled
+            pending = initial
+            while True:
+                if pending:
+                    data, pending = pending, b""
+                else:
+                    data = await proc.stdout.read(4096)
+                    if not data:
+                        return
+                forwarded, events = apc.feed(data)
+                out.extend(forwarded)
+                for ev in events:
+                    framed = parse_route(ev)
+                    if framed is not None and (
+                        framed[0] in tunnels or framed[1].startswith(b"TUN:")
+                    ):
+                        tunnels.handle(*framed)
+                        continue
+                    resp = server.serve(ev)
+                    if resp is not None:
+                        proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
+                    if not injected and ev.startswith(b"FILEREQ:sb-bash.rc"):
+                        injected = True  # open the deeper mux via a conduit
+                        proc.stdin.write(
+                            b"mkdir -p /tmp/sbtun && "
+                            b"sb inject env SB_CACHE=/tmp/sbtun/cache bash\n"
+                        )
+                    elif (
+                        not tunneled
+                        and ev.startswith(b"R")
+                        and b"FILEREQ:sb-bash.rc" in ev
+                    ):
+                        tunneled = True  # deeper mux is up → tunnel from it
+                        proc.stdin.write(
+                            b"echo TUNPING | sb tunnel connect 127.0.0.1:%d\n" % port
+                        )
+                if b"GOT:TUNPING" in bytes(out):
+                    return
 
-                try:
-                    await asyncio.wait_for(pump(), 120.0)
-                finally:
-                    tunnels.close_all()
-                    with contextlib.suppress(Exception):
-                        proc.stdin.write(b"exit\nexit\n")
+        try:
+            await asyncio.wait_for(pump(), 120.0)
+        finally:
+            tunnels.close_all()
+            with contextlib.suppress(Exception):
+                proc.stdin.write(b"exit\nexit\n")
     assert b"GOT:TUNPING" in bytes(out), bytes(out)[-400:]

@@ -1,8 +1,14 @@
 # shell-bucket
 
-SSH wrapper with in-band multiplexing for transparent delivery of helper files,
-lazy aliases, TCP tunnels, and an optional NAT-traversed UDP backhaul — with
-iTerm2 integration.
+Generic tty wrapper with in-band multiplexing for transparent delivery of helper
+files, lazy aliases, TCP tunnels, and an optional NAT-traversed UDP backhaul —
+with iTerm2 integration.
+
+shell-bucket is **not** about SSH. It wraps *any* tty tool that drops you into a
+shell — `ssh`, `aws ecs execute-command`, `docker exec -it`, `bash`, `screen`,
+a serial console, `it2-ssh` — and makes your local toolbox available at the far
+end. You name the command; the wrapper runs it under a local pseudo-terminal and
+rides that tty.
 
 ## Why
 
@@ -32,14 +38,17 @@ the tty, generalized.
 
 **Practical example:** need `jmap` on an ECS instance without baking it into the
 Docker image? Put the static binary in your bucket. The next time you
-`shell-bucket connect` to that instance, `jmap` is on the path.
+`shell-bucket wrap -- aws ecs execute-command …` into that instance, `jmap` is on
+the path.
 
 ## What it does
 
-`shell-bucket connect user@host` opens an asyncssh SSH session. The wrapper
-silently feeds a POSIX bootstrap script into the remote shell over the PTY. The
-bootstrap fetches the static `sb` binary for the remote's OS/arch in-band (one
-FILEREQ exchange), then `exec`s `sb mux`. `sb mux` takes over the PTY and:
+`shell-bucket wrap -- ssh user@host` runs `ssh user@host` under a local
+pseudo-terminal (substitute any tty tool — `wrap -- aws ecs execute-command …`,
+`wrap -- bash`, etc.). Once it lands you in a shell, the wrapper silently feeds a
+POSIX bootstrap script into that shell over the PTY. The bootstrap fetches the
+static `sb` binary for the remote's OS/arch in-band (one FILEREQ exchange), then
+`exec`s `sb mux`. `sb mux` takes over the PTY and:
 
 - fetches the manifest and per-shell runtime from the wrapper
 - populates a PATH dispatch directory of busybox-style symlinks (one per helper
@@ -74,29 +83,29 @@ shell doesn't launch itself.
 ## CLI
 
 ```
-shell-bucket connect USER@HOST [--tmux SESSION] [--shell SHELL]
-                     [--password-on-stdin | --identity-file PATH]
-                     [--no-known-hosts]
+shell-bucket wrap [--tmux SESSION] [--shell SHELL] -- COMMAND [ARGS...]
 ```
 
-Opens an interactive session with full shell-bucket injection. Options:
+Runs `COMMAND` under a local pseudo-terminal and brings full shell-bucket
+injection up over it. `COMMAND` is any tty tool that lands you in a shell:
+
+```
+shell-bucket wrap -- ssh user@host
+shell-bucket wrap -- aws ecs execute-command --cluster c --command /bin/bash --interactive …
+shell-bucket wrap -- docker exec -it mycontainer bash
+shell-bucket wrap -- bash
+```
+
+Everything after `--` is the command and its own flags, passed through untouched.
+Authentication and host-key handling belong to the wrapped tool, not the wrapper
+— shell-bucket assumes the command lands you in a shell with no interactive
+preamble (no `password:` prompt). Options:
 
 - `--tmux SESSION` — attach/create a tmux session after injection (requires tmux
   3.3+ on the remote for APC passthrough). `sb mux` forkpty's the fetchable
   `sb-tmux.sh` launcher, which resolves a tmux binary (system or bucket-fetched),
   writes the pane config with `@sb-token` for reconnect, and execs `tmux new -A`.
 - `--shell SHELL` — login shell (bash / zsh / ksh; default bash)
-- `--password-on-stdin` / `--identity-file PATH` — authentication
-
-```
-shell-bucket download USER@HOST:/remote/path [-o LOCAL_PATH]
-                      [--password-on-stdin | --identity-file PATH]
-                      [--no-known-hosts]
-```
-
-Downloads one file over asyncssh, saving to `~/Downloads/<name>` by default. In
-iTerm2 outside tmux, image files (png, jpg, gif, …) are also displayed inline via
-OSC 1337.
 
 ```
 shell-bucket fetch-tmux [--version VER] [--platform linux/ARCH ...] [--source URL]
@@ -251,11 +260,12 @@ Compression (raw DEFLATE with a persistent cross-session dictionary) sits betwee
 the frame layer and the ARQ — above the ARQ rather than below — because the ARQ
 guarantees ordering, making the dictionary valid for the entire session.
 
-## Host-key verification
+## Authentication & host-key verification
 
-A TOFU (trust-on-first-use) store in OpenSSH `known_hosts` format lives in the
-platform config directory. Pass `--no-known-hosts` to skip for VPN-only ephemeral
-hosts.
+These belong to the wrapped tool, not to shell-bucket. `ssh` consults your
+`~/.ssh/config`, agent, keys, and `known_hosts`; `aws ecs execute-command` uses
+your AWS credentials; and so on. The wrapper just runs the command you give it
+and rides the resulting tty — it holds no keys and verifies no hosts.
 
 ## Installation
 

@@ -1,12 +1,13 @@
 """Docker-backed integration test fixtures.
 
-Starts a session-scoped `linuxserver/openssh-server` container; tests connect
-via the mapped port. Skips cleanly if Docker isn't available.
+Starts a session-scoped `linuxserver/openssh-server` container; tests reach it
+by wrapping the system `ssh` (via `sshpass` for the password) under the generic
+PTY transport — exactly as `shell-bucket wrap -- ssh …` would. Skips cleanly if
+Docker (or sshpass) isn't available.
 """
 
 from __future__ import annotations
 
-import asyncio
 import shutil
 import socket
 import subprocess
@@ -14,7 +15,6 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-import asyncssh
 import pytest
 
 _IMAGE = "linuxserver/openssh-server:latest"
@@ -44,25 +44,20 @@ def _docker_available() -> bool:
     return result.returncode == 0
 
 
-async def _wait_ready(host: str, port: int, user: str, password: str) -> None:
+def _wait_ready(host: str, port: int) -> None:
+    """Poll until sshd answers with an SSH banner (no asyncssh needed)."""
     deadline = time.monotonic() + _READY_TIMEOUT_S
     last_err: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            async with asyncssh.connect(
-                host,
-                port=port,
-                username=user,
-                password=password,
-                known_hosts=None,
-                connect_timeout=2,
-            ) as conn:
-                result = await conn.run("echo ready", check=True)
-                if result.stdout and "ready" in result.stdout:
+            with socket.create_connection((host, port), timeout=2) as s:
+                s.settimeout(2)
+                banner = s.recv(64)
+                if banner.startswith(b"SSH-"):
                     return
-        except (OSError, asyncssh.Error) as e:
+        except OSError as e:
             last_err = e
-            await asyncio.sleep(1.0)
+        time.sleep(1.0)
     raise TimeoutError(
         f"SSH server at {host}:{port} did not become ready in {_READY_TIMEOUT_S}s "
         f"(last error: {last_err!r})"
@@ -92,7 +87,7 @@ def ssh_server() -> Iterator[SSHServer]:
     container_id = run.stdout.strip()
 
     try:
-        asyncio.run(_wait_ready("127.0.0.1", port, _USER, _PASSWORD))
+        _wait_ready("127.0.0.1", port)
         yield SSHServer(host="127.0.0.1", port=port, user=_USER, password=_PASSWORD)
     finally:
         subprocess.run(["docker", "kill", container_id], capture_output=True)

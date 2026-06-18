@@ -1,11 +1,10 @@
 [project]
 name = "shell-bucket"
 version = "0.1.0"
-description = "iTerm2-integrated SSH wrapper with lazy file delivery — 'You CAN take it with you!'"
+description = "Generic tty wrapper with lazy file delivery — 'You CAN take it with you!'"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "asyncssh>=2.18",
     "click>=8.1",
     "cryptography>=44",
     "platformdirs>=4.3",

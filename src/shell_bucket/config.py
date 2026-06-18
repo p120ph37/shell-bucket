@@ -6,12 +6,14 @@ Everything lives under a single user-visible tree, ``~/.shell-bucket/`` (like
 
   ~/.shell-bucket/
     config.toml      wrapper defaults — local-only, never served
-    known_hosts      TOFU trust store — local-only (0600)
     bucket/          THE SERVED TREE (the FILEREQ namespace; path-confined)
 
 The served *bucket* is deliberately a subdirectory: the wrapper resolves every
-FILEREQ path within it, so wrapper-local files (config, trust store) must sit
-*outside* it and can never be fetched.
+FILEREQ path within it, so wrapper-local files (config) must sit *outside* it
+and can never be fetched.
+
+Host-key trust is no longer the wrapper's concern: the wrapped tty tool (ssh,
+ECS Execute Command, …) owns its own authentication and host verification.
 """
 
 from __future__ import annotations
@@ -33,11 +35,6 @@ def root_dir() -> Path:
 def bucket_dir() -> Path:
     """The served tree: portable files in os/os_arch subdirs + agnostic root."""
     return root_dir() / "bucket"
-
-
-def known_hosts_path() -> Path:
-    """TOFU-managed known_hosts (local-only, 0600)."""
-    return root_dir() / "known_hosts"
 
 
 def config_path() -> Path:
