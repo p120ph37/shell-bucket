@@ -4,6 +4,36 @@ SSH wrapper with in-band multiplexing for transparent delivery of helper files,
 lazy aliases, TCP tunnels, and an optional NAT-traversed UDP backhaul — with
 iTerm2 integration.
 
+## Why
+
+Every remote shell is the same story: `ssh` gets you in, but `jq` isn't there,
+your vim config isn't there, your aliases aren't there, and if you need to move
+a file you're copy-pasting base64 into the terminal. Multiply that by jump-hosts,
+AWS ECS Execute Command, serial consoles, `docker exec -it`, and whatever other
+connection path stands between you and the thing you need to fix — and the
+friction adds up fast.
+
+shell-bucket wraps any of those connection commands and makes your local toolbox
+available at the other end. Drop a static binary or a shell script into your
+bucket, and it appears on the remote PATH, downloaded on first use. The manifest
+tracks mtimes, so nothing re-sends unless it changed. Pile in as much as you
+like — only what you actually invoke crosses the wire.
+
+Everything rides the tty itself via in-band multiplexing. No special network
+access, no remote daemon, no extra SSH channel. If you can get a shell there,
+shell-bucket works: `sshd` → shell-bucket, jump-host → shell-bucket, ECS Execute
+Command → shell-bucket, serial port to a Raspberry Pi → shell-bucket. Hops
+compose, so a single session can chain through all of the above at once, with the
+full toolbox available at every depth.
+
+The security model follows naturally from the transport: the tunnels and tooling
+evaporate when the tty closes, just like SSH port-forwarding — because it *is*
+the tty, generalized.
+
+**Practical example:** need `jmap` on an ECS instance without baking it into the
+Docker image? Put the static binary in your bucket. The next time you
+`shell-bucket connect` to that instance, `jmap` is on the path.
+
 ## What it does
 
 `shell-bucket connect user@host` opens an asyncssh SSH session. The wrapper
