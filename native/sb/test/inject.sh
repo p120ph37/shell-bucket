@@ -1,5 +1,5 @@
 # Self-tests for `sb inject <cmd>` / `sb i <cmd>`: the injector's spawn+relay
-# core (no bootstrap feed yet) — forkpty the command and pass bytes through.
+# core (no bootstrap feed yet) -- forkpty the command and pass bytes through.
 B=/b/sb
 
 echo "=== T1: inject relays a command + propagates its exit ==="
@@ -14,7 +14,7 @@ printf 'test -t 0 && echo CHILD_TTY=yes || echo CHILD_TTY=no\nexit\n' \
 
 echo "=== T3: no command is a usage error ==="
 $B inject </dev/null >/dev/null 2>&1; rc=$?
-[ "$rc" = 2 ] && echo "ok:   inject no-cmd → 2" || echo "FAIL: inject no-cmd ($rc)"
+[ "$rc" = 2 ] && echo "ok:   inject no-cmd -> 2" || echo "FAIL: inject no-cmd ($rc)"
 
 echo "=== T4: the 'i' alias works ==="
 out=$(printf '' | $B i sh -c 'echo VIA_I' 2>/dev/null)

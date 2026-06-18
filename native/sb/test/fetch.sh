@@ -25,13 +25,13 @@ printf '%s\n~EOF mtime=1700000001\n' "$(printf 'data\n' | base64 | tr -d '\n')" 
 ck "T2 not executable" "no" "$([ -x /tmp/plain ] && echo yes || echo no)"
 ck "T2 content" "data" "$(cat /tmp/plain)"
 
-# --- T3: ~ERR NOT_CHANGED → status 1, no file written ---
+# --- T3: ~ERR NOT_CHANGED -> status 1, no file written ---
 rm -f /tmp/nc
 printf '~ERR NOT_CHANGED\n' | $B __fetchtest TESTTOK x /tmp/nc >/dev/null 2>/tmp/st
 ck "T3 notchanged status" "status=1" "$(cat /tmp/st)"
 ck "T3 no file" "absent" "$([ -e /tmp/nc ] && echo present || echo absent)"
 
-# --- T4: ~ERR NOT_FOUND → status 2 ---
+# --- T4: ~ERR NOT_FOUND -> status 2 ---
 printf '~ERR NOT_FOUND\n' | $B __fetchtest TESTTOK x /tmp/nf >/dev/null 2>/tmp/st
 ck "T4 err status" "status=2" "$(cat /tmp/st)"
 

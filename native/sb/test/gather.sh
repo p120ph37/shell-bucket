@@ -1,9 +1,9 @@
 # Self-test for mux-side server-reflexive (srflx) candidate gathering (loopback).
 # A fake STUN observer (__stunserver) reports a fixed "public" mapping; the mux
-# gather path (__gatherprobe → real start_backhaul) queries it on its punch socket
+# gather path (__gatherprobe -> real start_backhaul) queries it on its punch socket
 # and must surface that mapping as its srflx AND include it in the UP:A candidate
 # set. Proves non-blocking, on-socket STUN gathering for cone-NAT topologies.
-# (Symmetric NAT can't be handled by STUN — the mux falls back to in-band; that
+# (Symmetric NAT can't be handled by STUN -- the mux falls back to in-band; that
 # path is the no-STUN-servers branch already covered by the upgrade E2E test.)
 B="/b/sb"
 SPORT=34780          # fake STUN observer port

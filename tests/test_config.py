@@ -16,7 +16,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-# ───── paths ────────────────────────────────────────────────────────────────
+# ----- paths ----------------------------------------------------------------
 
 def test_paths_under_env_root(home: Path) -> None:
     assert root_dir() == home
@@ -24,7 +24,7 @@ def test_paths_under_env_root(home: Path) -> None:
     assert config_path() == home / "config.toml"
 
 
-# ───── load_config ───────────────────────────────────────────────────────────
+# ----- load_config -----------------------------------------------------------
 
 def test_load_config_missing_is_empty(home: Path) -> None:
     assert load_config() == {}
@@ -40,7 +40,7 @@ def test_load_config_malformed_is_empty(home: Path) -> None:
     assert load_config() == {}
 
 
-# ───── TmuxConfig ─────────────────────────────────────────────────────────────
+# ----- TmuxConfig -------------------------------------------------------------
 
 def test_tmux_config_defaults() -> None:
     cfg = TmuxConfig()

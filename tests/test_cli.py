@@ -20,7 +20,7 @@ def test_parse_destination_basic() -> None:
 @pytest.mark.parametrize("bad", ["hostonly", "@host", "user@", "", "@", "user@@host"])
 def test_parse_destination_rejects_malformed(bad: str) -> None:
     if bad == "user@@host":
-        # 'user' + '@' + '@host' — host is '@host', non-empty, so we accept this.
+        # 'user' + '@' + '@host' -- host is '@host', non-empty, so we accept this.
         # That's a known limitation of partition('@'); document via this test.
         assert parse_destination(bad).host == "@host"
         return
@@ -131,7 +131,7 @@ def test_permission_denied_returns_1(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "authentication failed" in result.output
 
 
-# ───── group + download subcommand ─────────────────────────────────────────
+# ----- group + download subcommand -----------------------------------------
 
 def test_cli_is_a_group_with_connect_and_download() -> None:
     """`shell-bucket` is a group with `connect` and `download` subcommands."""

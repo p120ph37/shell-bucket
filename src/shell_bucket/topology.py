@@ -1,11 +1,11 @@
-"""Session topology — the graph of `sb` multiplexers the wrapper learns about.
+"""Session topology -- the graph of `sb` multiplexers the wrapper learns about.
 
 Rebuilt by **SURVEY**: the wrapper sends a `SURVEY:<id>` APC down the byte
 stream; every `sb mux` replies `SURVEYR:<id>:<route>:<identity>` (host/os/arch/pid)
 and fans the survey out to its conduit children. A reply's `<route>` is the path
-of conduit-ids from the wrapper to that node — empty at the node itself, with each
+of conduit-ids from the wrapper to that node -- empty at the node itself, with each
 mux prepending its conduit's cid as it relays the reply up. So the wrapper ends up
-with a `route → identity` map: the topology graph, *and* the address book for
+with a `route -> identity` map: the topology graph, *and* the address book for
 source-routed pushes (the same route a `PUSH` walks down).
 """
 
@@ -37,7 +37,7 @@ class Node:
 
 
 def parse_route_path(route: bytes) -> tuple[int, ...]:
-    """Parse a comma-separated cid route (`3,7`), empty → ()."""
+    """Parse a comma-separated cid route (`3,7`), empty -> ()."""
     s = route.decode("ascii", "replace").strip()
     if not s:
         return ()

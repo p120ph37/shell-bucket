@@ -24,7 +24,7 @@ from shell_bucket.file_delivery import (
 )
 
 
-# ───── parse_filereq (name + k/v flags) ─────────────────────────────────────
+# ----- parse_filereq (name + k/v flags) -------------------------------------
 
 def test_parse_bare_name() -> None:
     assert parse_filereq(b"FILEREQ:imgcat") == FileRequest(name="imgcat")
@@ -71,7 +71,7 @@ def test_parse_non_ascii() -> None:
     assert parse_filereq(b"FILEREQ:\xff") is None
 
 
-# ───── normalization ────────────────────────────────────────────────────────
+# ----- normalization --------------------------------------------------------
 
 def test_normalize_arch() -> None:
     assert normalize_arch("aarch64") == "arm64"
@@ -85,7 +85,7 @@ def test_normalize_os() -> None:
     assert normalize_os("Darwin") == "darwin"
 
 
-# ───── encode / err / sym (unchanged API) ───────────────────────────────────
+# ----- encode / err / sym (unchanged API) -----------------------------------
 
 def test_encode_roundtrip() -> None:
     data = b"some \x00\x01\xff bytes"
@@ -120,7 +120,7 @@ def test_err_delivery() -> None:
     assert err_delivery("X", "y") == b"~ERR X y\n"
 
 
-# ───── Bucket resolution ────────────────────────────────────────────────────
+# ----- Bucket resolution ----------------------------------------------------
 
 def _put(root: Path, rel: str, body: bytes = b"x", *, execu: bool = False) -> Path:
     p = root / rel
@@ -136,7 +136,7 @@ def test_resolve_os_arch_specific_wins(tmp_path: Path) -> None:
     _put(tmp_path, "linux/tool")
     target = _put(tmp_path, "linux_arm64/tool", body=b"ARMSPECIFIC")
     b = Bucket(tmp_path)
-    req = FileRequest(name="tool", os="Linux", arch="aarch64")  # → linux_arm64
+    req = FileRequest(name="tool", os="Linux", arch="aarch64")  # -> linux_arm64
     assert b.resolve(req) == target.resolve()
 
 
@@ -170,7 +170,7 @@ def test_resolve_confined_to_bucket(tmp_path: Path) -> None:
     assert Bucket(bucket).resolve(FileRequest(name="escape")) is None
 
 
-# ───── Bucket serve ─────────────────────────────────────────────────────────
+# ----- Bucket serve ---------------------------------------------------------
 
 def test_serve_missing_not_found(tmp_path: Path) -> None:
     assert Bucket(tmp_path).serve(FileRequest(name="x")) == err_delivery(ERR_NOT_FOUND)
@@ -194,16 +194,16 @@ def test_serve_mtime_match_not_changed(tmp_path: Path) -> None:
     assert Bucket(tmp_path).serve(FileRequest(name="imgcat", cached_mtime=m)) == err_delivery(ERR_NOT_CHANGED)
 
 
-# ───── Bucket scanning ──────────────────────────────────────────────────────
+# ----- Bucket scanning ------------------------------------------------------
 
 def test_alias_names_executables_across_tree(tmp_path: Path) -> None:
     _put(tmp_path, "imgcat", execu=True)
-    _put(tmp_path, "linux_arm64/sb", execu=True)     # reserved → excluded
+    _put(tmp_path, "linux_arm64/sb", execu=True)     # reserved -> excluded
     _put(tmp_path, "linux/it2copy", execu=True)
-    _put(tmp_path, "notexec", execu=False)             # not executable → excluded
-    _put(tmp_path, "rc.d/00-x.sh", execu=True)         # rc.d → excluded
-    _put(tmp_path, "sb-bash.rc", execu=False)          # .rc runtime → excluded
-    _put(tmp_path, "sb-tmux.sh", execu=True)           # executable sb-* launcher → dispatchable
+    _put(tmp_path, "notexec", execu=False)             # not executable -> excluded
+    _put(tmp_path, "rc.d/00-x.sh", execu=True)         # rc.d -> excluded
+    _put(tmp_path, "sb-bash.rc", execu=False)          # .rc runtime -> excluded
+    _put(tmp_path, "sb-tmux.sh", execu=True)           # executable sb-* launcher -> dispatchable
     assert Bucket(tmp_path).alias_names() == ["imgcat", "it2copy", "sb-tmux.sh"]
 
 
@@ -214,7 +214,7 @@ def test_manifest_text_format(tmp_path: Path) -> None:
     lines = Bucket(tmp_path).manifest_text().splitlines()
     assert f"imgcat\t{int(p1.stat().st_mtime)}\tx" in lines
     assert f"linux_arm64/sb\t{int(p2.stat().st_mtime)}\tx" in lines
-    assert f"myenvvars.sh\t{int(p3.stat().st_mtime)}\t" in lines  # non-exec → empty flags
+    assert f"myenvvars.sh\t{int(p3.stat().st_mtime)}\t" in lines  # non-exec -> empty flags
 
 
 def test_manifest_excludes_itself(tmp_path: Path) -> None:
@@ -227,7 +227,7 @@ def test_manifest_excludes_itself(tmp_path: Path) -> None:
 
 
 def test_manifest_round_trips_resolution(tmp_path: Path) -> None:
-    """The wrapper's manifest_text feeds the V resolver — spot-check the path/mtime
+    """The wrapper's manifest_text feeds the V resolver -- spot-check the path/mtime
     a `sb run imgcat` on linux/arm64 would pick is present verbatim."""
     p = _put(tmp_path, "linux_arm64/imgcat", body=b"ARM", execu=True)
     text = Bucket(tmp_path).manifest_text()
@@ -240,10 +240,10 @@ def test_rcd_fragments_sorted(tmp_path: Path) -> None:
     assert Bucket(tmp_path).rcd_fragments() == ["rc.d/00-a.sh", "rc.d/50-b.sh"]
 
 
-# ───── busybox-style symlink dedup (manifest link column) ────────────────────
+# ----- busybox-style symlink dedup (manifest link column) --------------------
 
 def test_manifest_emits_link_target_for_in_bucket_symlink(tmp_path: Path) -> None:
-    # busybox + an applet symlink → busybox. The applet's manifest line carries a
+    # busybox + an applet symlink -> busybox. The applet's manifest line carries a
     # 4th link-target column and inherits busybox's mtime + exec bit (so it stays
     # dispatchable), instead of being emitted as a second full copy.
     bb = _put(tmp_path, "busybox", body=b"\x7fELFbusybox", execu=True)
@@ -251,11 +251,11 @@ def test_manifest_emits_link_target_for_in_bucket_symlink(tmp_path: Path) -> Non
     lines = Bucket(tmp_path).manifest_text().splitlines()
     m = int(bb.stat().st_mtime)
     assert f"busybox\t{m}\tx" in lines
-    assert f"ls\t{m}\tx\tbusybox" in lines  # link → terminal, terminal's mtime/exec
+    assert f"ls\t{m}\tx\tbusybox" in lines  # link -> terminal, terminal's mtime/exec
 
 
 def test_manifest_chases_chain_to_terminal(tmp_path: Path) -> None:
-    # ls → coreutils → realbin: the link column is the TERMINAL (flattened here,
+    # ls -> coreutils -> realbin: the link column is the TERMINAL (flattened here,
     # so the on-target sb never chases at runtime).
     real = _put(tmp_path, "realbin", body=b"\x7fELF", execu=True)
     (tmp_path / "coreutils").symlink_to("realbin")

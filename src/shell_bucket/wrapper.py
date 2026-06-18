@@ -51,7 +51,7 @@ from shell_bucket.mux_frame import (
 )
 from shell_bucket.topology import Topology
 
-# A `SURVEY:<id>` reply (`SURVEYR:…`) is recorded into the topology, never replied to.
+# A `SURVEY:<id>` reply (`SURVEYR:...`) is recorded into the topology, never replied to.
 
 
 def regenerate_runtimes(bucket: Bucket) -> None:
@@ -59,7 +59,7 @@ def regenerate_runtimes(bucket: Bucket) -> None:
 
     Preserves each file's head (the user's pre-extension customizations, above
     the marker) and rewrites the generated body from the current bucket contents
-    (rc.d fetch/source stubs). Helpers are not baked into the runtime —
+    (rc.d fetch/source stubs). Helpers are not baked into the runtime --
     `sb mux` discovers them from the manifest and exposes them as PATH symlinks.
     Creates the file (with a preamble) if absent. Done at connect, before serving.
     """
@@ -101,12 +101,12 @@ def build_connect_kwargs(
     store: TOFUStore | None,
     port: int | None = None,
 ) -> dict[str, Any]:
-    """Pure construction of asyncssh.connect kwargs — extracted for unit testing."""
+    """Pure construction of asyncssh.connect kwargs -- extracted for unit testing."""
     kwargs: dict[str, Any] = {
         "host": host,
         "username": user,
         "client_factory": lambda: _ShellBucketSSHClient(store),
-        # Prefer zlib over none — asyncssh defaults offer both but list `none`
+        # Prefer zlib over none -- asyncssh defaults offer both but list `none`
         # first, which makes the server pick no compression. SSH negotiation
         # is client-order-wins, so put compression first explicitly. Falls back
         # to `none` if the server doesn't accept zlib.
@@ -155,7 +155,7 @@ def _session_script(
     tmux_config: TmuxConfig | None = None,
 ) -> str:
     """The begin-script the wrapper **feeds** at hop 1 (see `_feed_and_sync`): the
-    plain bootstrap, or — for `--tmux` — the same bootstrap whose `exec sb mux` runs the
+    plain bootstrap, or -- for `--tmux` -- the same bootstrap whose `exec sb mux` runs the
     fetchable `sb-tmux.sh` launcher (`--exec=sb-tmux.sh <session>`, with `tmux_config`
     carried as launcher flags). Both bake the shell and emit a BEGIN sync APC; the
     per-host token is minted by `sb mux` itself, not here. Nothing is written to the
@@ -207,34 +207,34 @@ class BootstrapServer:
     All commands arrive already prefix-stripped by the APC filter, so this only
     routes by command. A socket-relayed request arrives **label-swap framed** as
     `R<id>:<inner>`: the wrapper is the routing *terminus*, so it serves
-    `<inner>` and echoes the **same** id in an APC envelope (`R<id>:<response>`) —
+    `<inner>` and echoes the **same** id in an APC envelope (`R<id>:<response>`) --
     the relabelling lives in the muxes, the wrapper stays stateless. An unframed
-    command (the bootstrap, or a mux's own pre-pump `mux_setup` fetch —
+    command (the bootstrap, or a mux's own pre-pump `mux_setup` fetch --
     single-in-flight, pre-socket) is served + replied raw.
 
-    The wrapper holds no token — the wire is token-free (trust is
+    The wrapper holds no token -- the wire is token-free (trust is
     structural; see `apc_filter`) and each `sb mux` mints its own per-host socket
     token. The only non-file request is `BOOT` (the bootstrap `sb inject` feeds
     into the command it injects, baked with the shell); everything else is a
-    `FILEREQ` resolved as a path in the one bucket tree — `sb` and the
+    `FILEREQ` resolved as a path in the one bucket tree -- `sb` and the
     `sb-<family>.rc` runtimes are just files there (regenerated at connect; see
     `regenerate_runtimes`).
     """
 
     bucket: Bucket
     topology: Topology = field(default_factory=Topology)
-    pushes: dict[int, bytes] = field(default_factory=dict)  # push-id → reply body
+    pushes: dict[int, bytes] = field(default_factory=dict)  # push-id -> reply body
     clip: ClipConfig = field(default_factory=ClipConfig)
 
     def serve(self, command: bytes) -> bytes | None:
         """Return the wire response for one command, or None to drop it.
 
-        `R<id>:<inner>` → serve `<inner>` and echo the id as a RAW frame
+        `R<id>:<inner>` -> serve `<inner>` and echo the id as a RAW frame
         `R<id>:<resp>` (the caller frames it for transport: APC in-band, or raw
-        over the UDP backhaul). A `SURVEYR:…` reply is recorded into the topology,
-        a `PUSHR:…` reply into `pushes` — both dropped (fire-and-forget;
+        over the UDP backhaul). A `SURVEYR:...` reply is recorded into the topology,
+        a `PUSHR:...` reply into `pushes` -- both dropped (fire-and-forget;
         wrapper-initiated). A raw (unframed) command (the bootstrap / mux startup)
-        → raw reply bytes the deeper component reads literally, no framing.
+        -> raw reply bytes the deeper component reads literally, no framing.
         """
         sr = parse_surveyreply(command)
         if sr is not None:
@@ -269,7 +269,7 @@ class BootstrapServer:
         """Route one unframed command to its response (or None to drop it)."""
         if command.startswith(b"BOOT:"):
             # The injector (`sb inject`) asks for the bootstrap to feed into the
-            # command it drives — baked with the given shell, emitting a BEGIN sync
+            # command it drives -- baked with the given shell, emitting a BEGIN sync
             # APC so the injector knows it's live (the deeper mux mints its own token).
             shell = command[len(b"BOOT:") :].decode("utf-8", "replace")
             return encode_for_delivery(
@@ -356,7 +356,7 @@ class _TunnelConn:
             while True:
                 data = await reader.read(4096)
                 if not data:
-                    self._send(b"C:%d" % self._conn)  # socket closed → close the conn
+                    self._send(b"C:%d" % self._conn)  # socket closed -> close the conn
                     return
                 self._send(b"D:%d:" % self._conn + base64.b64encode(data))
         except (OSError, asyncio.CancelledError):
@@ -413,7 +413,7 @@ class _DialTunnel:
         try:
             reader, writer = await asyncio.open_connection(host or "127.0.0.1", int(port))
         except (OSError, ValueError):
-            self._send(b"C:%d" % conn)  # dial failed → close the conn back
+            self._send(b"C:%d" % conn)  # dial failed -> close the conn back
             self._conns.pop(conn, None)
             return
         c.attach(reader, writer)
@@ -514,7 +514,7 @@ class _BindTunnel:
 class TunnelManager:
     """Wrapper-side endpoint for `sb tunnel`. Each tunnel is a persistent route id; the
     manager does the wrapper-side socket work and pumps bytes as O/D/H/C frames. Frames
-    out go via `write_apc(payload)` — one `R<id>:<frame>\\n` APC down the byte stream."""
+    out go via `write_apc(payload)` -- one `R<id>:<frame>\\n` APC down the byte stream."""
 
     def __init__(self, write_apc: Callable[[bytes], None]) -> None:
         self._write_apc = write_apc
@@ -600,7 +600,7 @@ class TransportManager:
         t.add_done_callback(self._tasks.discard)
 
     async def offer(self) -> None:
-        """Gather candidates (off-loop — STUN blocks briefly) and send `UP:O:`.
+        """Gather candidates (off-loop -- STUN blocks briefly) and send `UP:O:`.
         Mints a fresh PSK/nonce each call so a renegotiation offer is independent."""
         self.psk = os.urandom(32)
         self.nonce = os.urandom(8)
@@ -710,7 +710,7 @@ async def _bridge_stdio(
 
     def send_down(frame: bytes) -> None:
         """Route a down-frame to the mux: raw over the UDP backhaul once up, else
-        APC-framed in-band. Framing is a transport concern — callers pass RAW frames."""
+        APC-framed in-band. Framing is a transport concern -- callers pass RAW frames."""
         if tm is not None and tm.active():
             tm.bh.send_frame(frame)
         else:
@@ -743,7 +743,7 @@ async def _bridge_stdio(
 
     # Preempt the tty during the mux's pre-pump setup: hold user keystrokes until it
     # signals MUXUP (ready to demux), so tty bytes never interlace the mux_setup
-    # fetch exchange — the same channel-separation the conduit relay enforces deeper
+    # fetch exchange -- the same channel-separation the conduit relay enforces deeper
     # in the tree. The mux emits MUXUP right after setup, so input releases promptly.
     mux_ready = False
     held_input = bytearray()
@@ -764,8 +764,8 @@ async def _bridge_stdio(
             held_input.extend(data)  # held until MUXUP
 
     def release_gate() -> None:
-        """Release held keystrokes — on the mux's MUXUP, or via the grace fallback
-        if it never starts — so input can never hang indefinitely."""
+        """Release held keystrokes -- on the mux's MUXUP, or via the grace fallback
+        if it never starts -- so input can never hang indefinitely."""
         nonlocal mux_ready
         if not mux_ready:
             mux_ready = True
@@ -774,21 +774,21 @@ async def _bridge_stdio(
                 held_input.clear()
 
     def dispatch_frame(ev: bytes) -> None:
-        """Route one up-frame from the mux — arriving in-band (APC) OR over the UDP
+        """Route one up-frame from the mux -- arriving in-band (APC) OR over the UDP
         backhaul; both land here so the transport is transparent to dispatch.
 
         `sb tunnel` frames (a persistent route) go to the TunnelManager; a framed
-        request (`R<id>:…`) is served and its reply routed down as a frame; an
+        request (`R<id>:...`) is served and its reply routed down as a frame; an
         unframed (bootstrap) reply is written raw (pre-pump, in-band only)."""
         if ev == b"MUXUP":
             release_gate()  # mux finished setup and can demux now
             return
         if tm is not None and ev.startswith(b"UP:A:"):
-            tm.on_answer(ev[5:], dispatch_frame)  # the mux's answer → establish the backhaul
+            tm.on_answer(ev[5:], dispatch_frame)  # the mux's answer -> establish the backhaul
             return
         if tm is not None and ev.startswith(b"UP:RX:"):
             with contextlib.suppress(ValueError):
-                tm.on_peer_revert(int(ev[6:]))  # mux reverting → lossless in-band handoff
+                tm.on_peer_revert(int(ev[6:]))  # mux reverting -> lossless in-band handoff
             return
         if tm is not None and ev == b"UP:RENEG":
             # Mux-initiated renegotiation (e.g. `sb ctl up`): force a fresh offer
@@ -803,7 +803,7 @@ async def _bridge_stdio(
             if rid in tunnels or inner.startswith(b"TUN:"):
                 tunnels.handle(rid, inner)
                 return
-            if inner == b"SURVEY":  # `sb survey` RPC → async broadcast + collect + reply
+            if inner == b"SURVEY":  # `sb survey` RPC -> async broadcast + collect + reply
                 survey_tasks.add(t := asyncio.create_task(run_survey(rid)))
                 t.add_done_callback(survey_tasks.discard)
                 return
@@ -813,7 +813,7 @@ async def _bridge_stdio(
         if resp is None:
             return
         if framed is not None:
-            send_down(resp)  # raw frame → transport-framed (UDP or in-band APC)
+            send_down(resp)  # raw frame -> transport-framed (UDP or in-band APC)
         else:
             proc.stdin.write(resp)  # raw, unframed pre-pump reply (in-band only)
 
@@ -885,8 +885,8 @@ async def _feed_and_sync(
     post-BEGIN remainder (the first bytes of real session traffic) to prime the
     bridge.
 
-    The script rides as one `eval "$(… base64 -d)"` line: POSIX, no heredoc or
-    continuation prompt, and nothing the transport must escape — the same shape
+    The script rides as one `eval "$(... base64 -d)"` line: POSIX, no heredoc or
+    continuation prompt, and nothing the transport must escape -- the same shape
     `sb inject` feeds for deeper hops. BEGIN is matched at the byte level (real
     ESC), so the echoed *source* of the fed line can't false-trigger it.
     """
@@ -928,14 +928,14 @@ async def run_session(
 
     Brings `shell` up under the multiplexer by **injecting** hop 1: it opens an
     ordinary login shell and feeds the session script over its stdin
-    (transport-agnostic, POSIX — no `<(…)`/argv escaping), exactly as `sb inject`
-    does for deeper hops. The script is the plain bootstrap, or — for `--tmux` — the
+    (transport-agnostic, POSIX -- no `<(...)`/argv escaping), exactly as `sb inject`
+    does for deeper hops. The script is the plain bootstrap, or -- for `--tmux` -- the
     tmux-resolving prologue (which brings tmux up with `sb mux` as the pane command).
     It fetches the sb binary and `exec`s the multiplexer (or tmux), whose in-band
     requests a `BootstrapServer` answers from the `bucket`. If `bucket` is None, a
     plain interactive shell runs.
 
-    The wire is token-free: the wrapper mints nothing — each `sb mux` mints
+    The wire is token-free: the wrapper mints nothing -- each `sb mux` mints
     its own per-host socket token.
     """
     server: BootstrapServer | None = None
@@ -962,7 +962,7 @@ async def run_session(
         ) as proc:
             initial = await _feed_and_sync(proc, script) if script else b""
             # The UDP backhaul is opt-in (SB_UDP_BACKHAUL=1) until it has soaked;
-            # off → identical in-band behavior.
+            # off -> identical in-band behavior.
             udp = os.environ.get("SB_UDP_BACKHAUL") == "1"
             await _bridge_stdio(proc, server=server, initial=initial, udp_backhaul=udp)
             return proc.returncode or 0

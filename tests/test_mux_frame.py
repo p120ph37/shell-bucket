@@ -33,7 +33,7 @@ def test_build_rejects_negative_id() -> None:
 
 
 def test_id_is_a_label_not_a_hop() -> None:
-    # Each request carries one local id; there's no hop arithmetic — the response
+    # Each request carries one local id; there's no hop arithmetic -- the response
     # echoes the same id and the originating mux routes it by its table.
     frame = build_route(7, b"FILEREQ:imgcat:os=linux:arch=arm64")
     rid, inner = parse_route(frame)

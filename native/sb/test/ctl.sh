@@ -1,6 +1,6 @@
 # Self-tests for `sb ctl` (control/status) against the __muxserve stub.
 # Exercises the STATUS wire protocol, the pretty-printed output shape, and the
-# BH:DOWN / BH:UP control verbs — all over the real bearer-auth socket handshake.
+# BH:DOWN / BH:UP control verbs -- all over the real bearer-auth socket handshake.
 B=/b/sb
 T="cccccc:secret3secret3secret3cc"
 waitsock() { i=0; while [ ! -S "$1" ] && [ "$i" -lt 100 ]; do sleep 0.02; i=$((i + 1)); done; }

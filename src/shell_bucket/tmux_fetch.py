@@ -23,7 +23,7 @@ from pathlib import Path
 # Default upstream: the official builds repo.
 DEFAULT_SOURCE = "tmux/tmux-builds"
 
-# Release-asset platform token → bucket os_arch subdir. The release uses
+# Release-asset platform token -> bucket os_arch subdir. The release uses
 # `linux/macos` + `x86_64/arm64`; the bucket uses `linux/darwin` + `amd64/arm64`.
 PLATFORMS: dict[str, str] = {
     "linux-x86_64": "linux_amd64",
@@ -32,7 +32,7 @@ PLATFORMS: dict[str, str] = {
     "macos-arm64": "darwin_arm64",
 }
 
-# Executable magic numbers — a sanity gate so a 404/HTML body can't masquerade
+# Executable magic numbers -- a sanity gate so a 404/HTML body can't masquerade
 # as a binary (the tarball would usually fail to parse first, but be explicit).
 _EXEC_MAGICS = (
     b"\x7fELF",          # ELF (Linux)
@@ -62,7 +62,7 @@ def asset_name(tag: str, platform: str) -> str:
 def asset_url(source: str, tag: str, platform: str) -> str:
     """Browser-download URL for a release asset on `source` (`owner/repo`). The
     download path uses the tag verbatim (`v3.6b`); the filename uses the bare
-    version (`tmux-3.6b-…`)."""
+    version (`tmux-3.6b-...`)."""
     return (
         f"https://github.com/{source}/releases/download/"
         f"{tag}/{asset_name(tag, platform)}"
@@ -115,7 +115,7 @@ def fetch_tmux(
     source: str = DEFAULT_SOURCE,
     download: Download = _urlopen_bytes,
 ) -> list[tuple[str, Path]]:
-    """Fetch tmux for each platform into the bucket; return [(platform, path), …].
+    """Fetch tmux for each platform into the bucket; return [(platform, path), ...].
 
     `version` defaults to the source's latest release; `platforms` to all known
     (`PLATFORMS`). Unknown platform tokens raise ValueError.

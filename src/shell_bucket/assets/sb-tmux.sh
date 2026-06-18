@@ -5,16 +5,16 @@
 # SB_OS / SB_ARCH / SB_TOKEN are exported.
 #
 # `sb` itself is session-mechanism-agnostic; ALL tmux logic lives here (screen/etc. can
-# be peer launchers). We bring up — or, on reconnect, RE-ATTACH to — a tmux session
+# be peer launchers). We bring up -- or, on reconnect, RE-ATTACH to -- a tmux session
 # whose panes are the tooled shell reaching the host mux over the SOCKET (no
 # allow-passthrough, no pane send-keys).
 #
 # tmux is resolved through the bucket's AUTOVIVIFICATION symlink: we just run `tmux`,
 # and whether that's the system one or the bucket's static one (fetched on first run via
-# its dispatch symlink) is decided purely by $PATH ORDER — no explicit fetch, no cache
+# its dispatch symlink) is decided purely by $PATH ORDER -- no explicit fetch, no cache
 # path. Flags (mirror the wrapper's [tmux] config):
 #   --no-system    put the bucket tmux first (don't prefer a $PATH/system tmux)
-#   --no-fetch     system tmux only (drop the bucket dispatch dir → no autoviv)
+#   --no-fetch     system tmux only (drop the bucket dispatch dir -> no autoviv)
 #   --no-fallback  error out instead of dropping to a plain shell when no tmux
 
 session="$1"
@@ -38,7 +38,7 @@ launch_shell() {
 	esac
 }
 
-# Resolve tmux by PATH ORDER only — the autoviv symlink in the bucket dispatch dir does
+# Resolve tmux by PATH ORDER only -- the autoviv symlink in the bucket dispatch dir does
 # the fetch-on-first-run. `command -v` under a policy-ordered PATH gives us a path to
 # exec; we exec it with our NORMAL env, so the tmux server + panes inherit the standard
 # bucket-first PATH (full tooling) whatever the resolution order was.
@@ -60,7 +60,7 @@ if [ -z "$tmux_bin" ]; then
 fi
 
 # Reconnect: if a tmux server is already running this session, recover the token it
-# saved (@sb-token) and tell THIS mux to adopt it — the mux rebinds its socket to the one
+# saved (@sb-token) and tell THIS mux to adopt it -- the mux rebinds its socket to the one
 # the surviving panes already cached, so their cached SB_TOKEN "starts working again".
 if "$tmux_bin" has-session -t "$session" 2>/dev/null; then
 	saved=$("$tmux_bin" show -gv @sb-token 2>/dev/null)
@@ -70,7 +70,7 @@ if "$tmux_bin" has-session -t "$session" 2>/dev/null; then
 fi
 
 # The pane command (tmux default-command), applied when CREATING the session: the same
-# tooled shell the non-tmux mux launches. bash → --rcfile; ksh → $ENV; others plain.
+# tooled shell the non-tmux mux launches. bash -> --rcfile; ksh -> $ENV; others plain.
 case "$SB_SHELL" in
 	*bash) dc="exec '$SB_SHELL' --rcfile '$rcfile'" ;;
 	*ksh*) export ENV="$rcfile"; dc="exec '$SB_SHELL'" ;;

@@ -20,7 +20,7 @@ pytestmark = pytest.mark.integration
 _REPO = Path(__file__).resolve().parents[2]
 _ARCH = "arm64" if platform.machine() in ("arm64", "aarch64") else "amd64"
 # The instrumented binary (dist-test/, SB_TEST=1): the `__arqrecv`/`__punchrecv`
-# hooks this driver needs exist ONLY there — production (dist/) strips them.
+# hooks this driver needs exist ONLY there -- production (dist/) strips them.
 _SB = _REPO / f"native/sb/dist-test/linux_{_ARCH}/sb"
 
 

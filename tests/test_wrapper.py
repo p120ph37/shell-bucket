@@ -23,7 +23,7 @@ from shell_bucket.wrapper import (
 )
 
 # The wire is token-free: the wrapper holds no token and the builders /
-# envelope take none — each `sb mux` mints its own per-host socket token.
+# envelope take none -- each `sb mux` mints its own per-host socket token.
 
 
 def _pubkey() -> asyncssh.SSHKey:
@@ -31,7 +31,7 @@ def _pubkey() -> asyncssh.SSHKey:
     return asyncssh.import_public_key(priv.export_public_key())
 
 
-# ───── build_connect_kwargs ────────────────────────────────────────────────
+# ----- build_connect_kwargs ------------------------------------------------
 
 def test_build_kwargs_password_auth() -> None:
     kw = build_connect_kwargs(
@@ -69,7 +69,7 @@ def test_build_kwargs_factory_carries_store(tmp_path: Path) -> None:
     assert isinstance(client, _ShellBucketSSHClient) and client._store is store
 
 
-# ───── host-key validation ─────────────────────────────────────────────────
+# ----- host-key validation -------------------------------------------------
 
 def test_client_no_store_accepts_any() -> None:
     assert _ShellBucketSSHClient(store=None).validate_host_public_key("h", "1.2.3.4", 22, _pubkey()) is True
@@ -82,7 +82,7 @@ def test_client_store_records_then_rejects_mismatch(tmp_path: Path) -> None:
     assert client.validate_host_public_key("h", "1.2.3.4", 22, _pubkey()) is False
 
 
-# ───── BootstrapServer ─────────────────────────────────────────────────────
+# ----- BootstrapServer -----------------------------------------------------
 
 def _put(root: Path, rel: str, body: bytes = b"x", *, execu: bool = False) -> Path:
     p = root / rel
@@ -98,7 +98,7 @@ def _server(bucket_path: Path) -> BootstrapServer:
 
 
 def test_serve_legacy_verbs_are_gone(tmp_path: Path) -> None:
-    # S2/S1/S1Q (the embed era) are no longer served → dropped, not answered.
+    # S2/S1/S1Q (the embed era) are no longer served -> dropped, not answered.
     srv = _server(tmp_path)
     assert srv.serve(b"S2:/usr/bin/bash") is None
     assert srv.serve(b"S1:/bin/bash") is None
@@ -106,7 +106,7 @@ def test_serve_legacy_verbs_are_gone(tmp_path: Path) -> None:
 
 
 def test_serve_boot_returns_begin_bootstrap(tmp_path: Path) -> None:
-    # The injector's `BOOT:<shell>` → the bootstrap to feed, with the BEGIN sync.
+    # The injector's `BOOT:<shell>` -> the bootstrap to feed, with the BEGIN sync.
     out = _server(tmp_path).serve(b"BOOT:/usr/bin/bash")
     assert out == encode_for_delivery(
         build_bootstrap("/usr/bin/bash", begin=True).encode("utf-8")
@@ -115,7 +115,7 @@ def test_serve_boot_returns_begin_bootstrap(tmp_path: Path) -> None:
 
 def test_serve_boot_route_framed_echoes_id_as_raw_frame(tmp_path: Path) -> None:
     # A BOOT relayed over a socket arrives R<id>-framed; the reply is a RAW frame
-    # echoing the id (the transport frames it — APC in-band or raw over UDP).
+    # echoing the id (the transport frames it -- APC in-band or raw over UDP).
     out = _server(tmp_path).serve(b"R0:BOOT:bash")
     assert out is not None and out.startswith(b"R0:") and not out.startswith(b"\x1b_")
 
@@ -136,26 +136,26 @@ def test_serve_unrecognized_returns_none(tmp_path: Path) -> None:
     assert srv.serve(b"garbage") is None and srv.serve(b"") is None
 
 
-# ───── R<id> request-id frame (label-swap mux socket relay) ───────────
+# ----- R<id> request-id frame (label-swap mux socket relay) -----------
 
 def test_serve_route_echoes_request_id_as_raw_frame(tmp_path: Path) -> None:
     from shell_bucket.mux_frame import build_route
 
     a = _put(tmp_path, "alpha", body=b"A", execu=True)
     raw = encode_for_delivery(b"A", flags=("chmod=+x", f"mtime={int(a.stat().st_mtime)}"))
-    # A socket request relayed up as R7:… → reply re-tagged with the same id, as a
-    # RAW frame (the transport — APC in-band or UDP backhaul — frames it).
+    # A socket request relayed up as R7:... -> reply re-tagged with the same id, as a
+    # RAW frame (the transport -- APC in-band or UDP backhaul -- frames it).
     out = _server(tmp_path).serve(b"R7:FILEREQ:alpha")
     assert out == build_route(7, raw)
 
 
 def test_serve_route_drop_stays_dropped(tmp_path: Path) -> None:
-    # An inner command the server drops → the whole R-frame is dropped (no reply).
+    # An inner command the server drops -> the whole R-frame is dropped (no reply).
     assert _server(tmp_path).serve(b"R3:garbage") is None
 
 
 def test_serve_route_raw_filereq_unframed(tmp_path: Path) -> None:
-    # A raw (unframed) FILEREQ — the bootstrap / mux-startup path — gets a raw,
+    # A raw (unframed) FILEREQ -- the bootstrap / mux-startup path -- gets a raw,
     # un-enveloped reply (the requester reads raw `~EOF` lines).
     p = _put(tmp_path, "linux_arm64/sb", body=b"\x7fELF", execu=True)
     out = _server(tmp_path).serve(b"FILEREQ:sb:os=Linux:arch=aarch64")
@@ -164,7 +164,7 @@ def test_serve_route_raw_filereq_unframed(tmp_path: Path) -> None:
     assert not out.startswith(b"\x1b_")  # no APC envelope
 
 
-# ───── dispatch_apc_events ─────────────────────────────────────────────────
+# ----- dispatch_apc_events -------------------------------------------------
 
 def test_dispatch_routes_through_server(tmp_path: Path) -> None:
     a = _put(tmp_path, "alpha", body=b"A", execu=True)
@@ -185,7 +185,7 @@ def test_dispatch_no_server_is_silent() -> None:
     assert written == []
 
 
-# ───── SURVEY → topology ───────────────────────────────────────────────
+# ----- SURVEY -> topology -----------------------------------------------
 
 def test_serve_surveyreply_records_topology_no_reply(tmp_path: Path) -> None:
     srv = _server(tmp_path)
@@ -205,7 +205,7 @@ def test_survey_apc_is_enveloped_survey(tmp_path: Path) -> None:
     assert srv.survey_apc(5) == apc_envelope(build_survey(5))
 
 
-# ───── regenerate_runtimes ──────────────────────────────────────────────────
+# ----- regenerate_runtimes --------------------------------------------------
 
 def test_regenerate_creates_runtimes(tmp_path: Path) -> None:
     bucket = Bucket(tmp_path / "bucket")
@@ -234,7 +234,7 @@ def test_regenerate_preserves_user_head(tmp_path: Path) -> None:
     assert "# MY CUSTOM" in rc and "export X=1" in rc and "stale" not in rc
 
 
-# ───── _session_script (the script the wrapper feeds at hop 1) ──────────────
+# ----- _session_script (the script the wrapper feeds at hop 1) --------------
 
 def test_session_script_plain_is_begin_bootstrap() -> None:
     assert _session_script("bash") == build_bootstrap("bash", begin=True)
@@ -250,17 +250,17 @@ def test_session_script_tmux_is_begin_prologue() -> None:
 
 
 def test_session_script_tmux_honors_config() -> None:
-    # prefer_system off + fetch off → those policies ride as launcher `--no-*` flags.
+    # prefer_system off + fetch off -> those policies ride as launcher `--no-*` flags.
     cfg = TmuxConfig(prefer_system=False, fetch_if_missing=False)
     s = _session_script("bash", tmux_session="proj", tmux_config=cfg)
     assert 'exec "$SB_CACHE/sb" mux --exec=sb-tmux.sh proj --no-system --no-fetch' in s
 
 
-# ───── BootstrapServer: clipboard (CLIP:GET / CLIP:SET) ───────────────────────
+# ----- BootstrapServer: clipboard (CLIP:GET / CLIP:SET) -----------------------
 
 def test_clip_get_serves_apc_safe_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The wrapper returns b64-encoded clipboard bytes so the APC frame is binary-safe.
-    # The mux decodes b64 → raw before writing to the socket client (transparent to user).
+    # The mux decodes b64 -> raw before writing to the socket client (transparent to user).
     import shell_bucket.wrapper as _w
     monkeypatch.setattr(_w, "_clipboard_get", lambda: b"hello clipboard")
     srv = _server(tmp_path)
@@ -320,7 +320,7 @@ def test_clip_set_bad_base64(tmp_path: Path) -> None:
     assert resp == build_route(6, b"ERR:bad-base64")
 
 
-# ───── TransportManager: one-shot renegotiation on backhaul death ───────────
+# ----- TransportManager: one-shot renegotiation on backhaul death -----------
 
 
 def _offers(writes: list[bytes]) -> list[bytes]:
@@ -331,7 +331,7 @@ def _offers(writes: list[bytes]) -> list[bytes]:
 async def test_transport_manager_one_shot_renegotiation() -> None:
     # A backhaul that had been up dies (roaming / NAT-rebind). The wrapper makes
     # exactly ONE attempt to renegotiate a fresh path, then falls back to in-band:
-    # a second death does not offer again. No STUN servers → _gather just binds a
+    # a second death does not offer again. No STUN servers -> _gather just binds a
     # host candidate locally (fast, no network).
     writes: list[bytes] = []
     tm = TransportManager(write_raw=writes.append, stun=[])
@@ -341,7 +341,7 @@ async def test_transport_manager_one_shot_renegotiation() -> None:
     assert tm.sock is not None
     first_psk = tm.psk
 
-    # First death → one renegotiation offer, with a freshly minted PSK.
+    # First death -> one renegotiation offer, with a freshly minted PSK.
     tm.bh = object()  # truthy stand-in for an up backhaul
     tm._on_bh_closed()
     await asyncio.gather(*list(tm._tasks))
@@ -349,7 +349,7 @@ async def test_transport_manager_one_shot_renegotiation() -> None:
     assert len(_offers(writes)) == 2
     assert tm.psk != first_psk  # offers are independent
 
-    # Second death → no further renegotiation; stay in-band.
+    # Second death -> no further renegotiation; stay in-band.
     tm.bh = object()
     tm._on_bh_closed()
     await asyncio.gather(*list(tm._tasks))
@@ -373,7 +373,7 @@ async def test_up_reneg_forces_offer_past_one_shot_guard() -> None:
     assert tm._reneg_used is True
     assert len(_offers(writes)) == 2
 
-    # Now inject UP:RENEG (as dispatch_frame would) — must bypass the guard.
+    # Now inject UP:RENEG (as dispatch_frame would) -- must bypass the guard.
     tm._reneg_used = False   # simulates what dispatch_frame does on UP:RENEG
     tm._spawn_offer()
     await asyncio.gather(*list(tm._tasks))

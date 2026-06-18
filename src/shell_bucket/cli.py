@@ -56,7 +56,7 @@ def _read_password() -> str:
     return line.rstrip("\n")
 
 
-# ─── shared options ────────────────────────────────────────────────────────
+# --- shared options --------------------------------------------------------
 
 
 def _auth_options(f):
@@ -86,12 +86,12 @@ def _validate_auth(password_on_stdin: bool, identity_file: Path | None) -> None:
         )
 
 
-# ─── group + commands ──────────────────────────────────────────────────────
+# --- group + commands ------------------------------------------------------
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
-    """shell-bucket — SSH wrapper with iTerm2 integration and lazy helper delivery."""
+    """shell-bucket -- SSH wrapper with iTerm2 integration and lazy helper delivery."""
 
 
 @cli.command(
@@ -159,7 +159,7 @@ def connect(
     sys.exit(rc)
 
 
-# ─── download ──────────────────────────────────────────────────────────────
+# --- download --------------------------------------------------------------
 
 
 def _iterm_inline_image(name: str, data: bytes) -> bytes:
@@ -189,7 +189,7 @@ async def _download(
         store=store,
     )
     async with asyncssh.connect(**kwargs) as conn:
-        # SFTP is the right hammer — handles binary cleanly, no pty echo issues.
+        # SFTP is the right hammer -- handles binary cleanly, no pty echo issues.
         async with conn.start_sftp_client() as sftp:
             await sftp.get(dest.path, str(out_path))
     return out_path, out_path.stat().st_size
@@ -246,7 +246,7 @@ def download(
         click.echo(f"shell-bucket: download failed: {e}", err=True)
         sys.exit(1)
 
-    click.echo(f"shell-bucket: saved {size} bytes → {local_path}")
+    click.echo(f"shell-bucket: saved {size} bytes -> {local_path}")
 
     # iTerm2-only enhancement: inline-display images. Guarded so it never
     # breaks or interferes with other terminals (or with a tmux/screen session
@@ -261,7 +261,7 @@ def download(
         sys.stdout.buffer.flush()
 
 
-# ─── fetch-tmux ─────────────────────────────────────────────────────────────
+# --- fetch-tmux -------------------------------------------------------------
 
 
 @cli.command(
@@ -309,7 +309,7 @@ def fetch_tmux_cmd(version: str | None, platforms: tuple[str, ...], source: str)
         click.echo(f"shell-bucket: fetch-tmux failed: {e}", err=True)
         sys.exit(1)
     for platform, path in installed:
-        click.echo(f"shell-bucket: {platform} → {path}")
+        click.echo(f"shell-bucket: {platform} -> {path}")
 
 
 if __name__ == "__main__":

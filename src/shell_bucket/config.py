@@ -1,12 +1,12 @@
 """Wrapper-host paths for shell-bucket.
 
 Everything lives under a single user-visible tree, ``~/.shell-bucket/`` (like
-``~/.ssh/``), not an XDG split — users prefer one tree. Override the root with
+``~/.ssh/``), not an XDG split -- users prefer one tree. Override the root with
 ``$SHELL_BUCKET_HOME`` (used by tests).
 
   ~/.shell-bucket/
-    config.toml      wrapper defaults — local-only, never served
-    known_hosts      TOFU trust store — local-only (0600)
+    config.toml      wrapper defaults -- local-only, never served
+    known_hosts      TOFU trust store -- local-only (0600)
     bucket/          THE SERVED TREE (the FILEREQ namespace; path-confined)
 
 The served *bucket* is deliberately a subdirectory: the wrapper resolves every
@@ -48,7 +48,7 @@ def config_path() -> Path:
 def load_config() -> dict:
     """Parse ``config.toml`` into a dict (``{}`` if absent or unparseable).
 
-    Config is optional — a missing or malformed file falls back to built-in
+    Config is optional -- a missing or malformed file falls back to built-in
     defaults rather than failing a connection.
     """
     path = config_path()

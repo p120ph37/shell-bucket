@@ -31,7 +31,7 @@ def test_record_ignores_malformed_identity_parts() -> None:
 def test_re_survey_same_route_updates_in_place() -> None:
     t = Topology()
     t.record(b"3", b"host=h:pid=7")
-    t.record(b"3", b"host=h2:pid=7")  # same route → replace
+    t.record(b"3", b"host=h2:pid=7")  # same route -> replace
     assert len(t) == 1
     assert t.nodes()[0].host == "h2"
 

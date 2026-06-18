@@ -25,7 +25,7 @@ echo "=== T3: new token authenticates; old token's socket is gone ==="
 out=$(SB_TOKEN=$T2 $B __muxclient hi2 2>/dev/null)
 [ "$out" = hi2 ] && echo "ok:   echo on new socket" || echo "FAIL: new echo ([$out])"
 SB_TOKEN=$T1 $B __muxclient x >/dev/null 2>&1; rc=$?
-[ "$rc" = 69 ] && echo "ok:   old token → EX_UNAVAILABLE (69)" || echo "FAIL: old token rc=$rc"
+[ "$rc" = 69 ] && echo "ok:   old token -> EX_UNAVAILABLE (69)" || echo "FAIL: old token rc=$rc"
 
 echo "=== T4: --randomize prints a fresh token and moves the socket ==="
 NEW=$(SB_TOKEN=$T2 $B token --randomize 2>/dev/null)
