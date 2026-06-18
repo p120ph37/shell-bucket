@@ -1,4 +1,4 @@
-"""The UDP backhaul transport — the wrapper's peer to the native `sb` Backhaul.
+"""The UDP backhaul transport -- the wrapper's peer to the native `sb` Backhaul.
 
 A faithful port of the V implementation (native/sb/src/main.v); the wire must
 match byte-for-byte. AES-256-GCM packets carry a TCP-lite ARQ that delivers a
@@ -10,10 +10,10 @@ Wire (V-authoritative):
             nonce = [salt:4 BE][seq:8 BE]; salt is a per-direction constant.
   ARQ payload = [flags:1][ack:8 BE] then if flags & DATA: [offset:8 BE][data]
   control     = flags bit7 set; 1-byte payload ctl_ping(0x80)/ctl_pong(0x81)
-  frame strm  = [u32 BE len][frame]…   raw-DEFLATE'd onto the reliable ARQ stream
+  frame strm  = [u32 BE len][frame]...   raw-DEFLATE'd onto the reliable ARQ stream
 A persistent raw-deflate compressor pair (wbits=-15, sync-flush per chunk) sits
-between the frame stream and the ARQ — order is guaranteed, so the dictionary is
-valid for the whole session. PSK (32 random bytes) is the AES-256 key — no KDF.
+between the frame stream and the ARQ -- order is guaranteed, so the dictionary is
+valid for the whole session. PSK (32 random bytes) is the AES-256 key -- no KDF.
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ RTO_MAX_MS = 8000
 F_DATA = 0x01
 CTL_PING = 0x80
 CTL_PONG = 0x81
-BH_HB_MS = 5000  # heartbeat cadence once up — refreshes NAT mappings + proves liveness
-BH_DEAD_MS = 20000  # no packet received for this long once up → path dead → revert in-band
+BH_HB_MS = 5000  # heartbeat cadence once up -- refreshes NAT mappings + proves liveness
+BH_DEAD_MS = 20000  # no packet received for this long once up -> path dead -> revert in-band
 
 # Direction salts (must match V): wrapper sends with 1, mux sends with 2.
 SALT_WRAPPER_TX = 1
@@ -50,7 +50,7 @@ def now_ms() -> int:
 
 
 def aead_nonce(salt: int, seq: int) -> bytes:
-    return struct.pack(">IQ", salt, seq)  # 4-byte salt ‖ 8-byte seq = 12 bytes
+    return struct.pack(">IQ", salt, seq)  # 4-byte salt || 8-byte seq = 12 bytes
 
 
 def udp_seal(key: bytes, salt: int, seq: int, payload: bytes) -> bytes:
@@ -70,7 +70,7 @@ def udp_open(key: bytes, salt: int, pkt: bytes) -> tuple[int, bytes] | None:
 
 
 class Arq:
-    """Reliable, ordered byte stream over the AEAD packet codec — a transport-
+    """Reliable, ordered byte stream over the AEAD packet codec -- a transport-
     agnostic state machine driven by app_send / on_packet / tick / poll_out, with
     an injected `now` clock (ms). Mirror of the V `Arq`."""
 
@@ -96,7 +96,7 @@ class Arq:
         # outbound sealed datagrams
         self.outq: list[bytes] = []
 
-    # ── packet codec (cached AESGCM) ──
+    # -- packet codec (cached AESGCM) --
     def _seal(self, payload: bytes) -> bytes:
         seq = self.pkt_seq
         self.pkt_seq += 1
@@ -246,7 +246,7 @@ class FrameStream:
         return out
 
 
-# ── UPGRADE signaling codec (offer / answer) — mirror of the V codec ──
+# -- UPGRADE signaling codec (offer / answer) -- mirror of the V codec --
 def _put_ipport(ip: str, port: int) -> bytes:
     return bytes(int(o) for o in ip.split(".")) + struct.pack(">H", port)
 
@@ -276,7 +276,7 @@ def encode_offer(psk: bytes, nonce: bytes, stun: list[tuple[str, int]], cands: l
 
 
 def local_ip() -> str:
-    """This host's primary IPv4 — the route's source address (no packets sent).
+    """This host's primary IPv4 -- the route's source address (no packets sent).
     The wrapper's host candidate."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -288,7 +288,7 @@ def local_ip() -> str:
         s.close()
 
 
-# ── STUN client (RFC 5389) — gather the wrapper's srflx candidate ──
+# -- STUN client (RFC 5389) -- gather the wrapper's srflx candidate --
 _STUN_COOKIE = bytes([0x21, 0x12, 0xA4, 0x42])
 
 
@@ -409,7 +409,7 @@ class UdpBackhaul:
         raw = self.arq.take_inbox()
         if raw:
             for frame in self.fs.feed(self._rx_comp.decompress(raw)):
-                self.rx_frames += 1  # whole frame consumed → peer may drop it on revert
+                self.rx_frames += 1  # whole frame consumed -> peer may drop it on revert
                 self.on_frame(frame)
 
     def _prune(self) -> None:
@@ -430,7 +430,7 @@ class UdpBackhaul:
             self.last_rx = now  # any packet (data, ack, heartbeat) proves the path is alive
             self.arq.on_packet(data, now)
             self._flush()
-            self._prune()  # acks advanced → drop confirmed frames from the revert FIFO
+            self._prune()  # acks advanced -> drop confirmed frames from the revert FIFO
             self._deliver()
             return
         if self.state != "punching":
@@ -459,7 +459,7 @@ class UdpBackhaul:
             delay = 0.2
         elif self.state == "up":
             if now - self.last_rx > BH_DEAD_MS:
-                self._begin_revert()  # UDP path went silent → lossless in-band handoff
+                self._begin_revert()  # UDP path went silent -> lossless in-band handoff
                 return
             if now >= self.next_hb:
                 with contextlib.suppress(OSError):
@@ -486,7 +486,7 @@ class UdpBackhaul:
             # in-band behind the undelivered tail, preserving order.
             self.sent.append((self.tx_off, frame))
 
-    # ── lossless revert handoff (coordinated over the durable in-band channel) ──
+    # -- lossless revert handoff (coordinated over the durable in-band channel) --
     def _begin_revert(self) -> None:
         """Enter the draining state and tell the peer, in-band, how many of its
         frames we have consumed so it can re-send only the tail we never got."""
@@ -501,7 +501,7 @@ class UdpBackhaul:
         """The peer is reverting and has consumed `n` of our frames. Re-send frames
         numbered >= n (the tail it never got) in-band, exactly once, then tear down."""
         if self.state == "up":
-            self._begin_revert()  # peer noticed first — mirror into the drain
+            self._begin_revert()  # peer noticed first -- mirror into the drain
         if self.state != "reverting" or self._resent:
             return
         self._resent = True

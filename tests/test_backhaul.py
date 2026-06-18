@@ -1,7 +1,7 @@
 """Unit tests for the Python UDP-backhaul transport (mirror of the V self-tests).
 
-Wire-compatibility with the native `sb` side rests on (a) identical AES-GCM —
-proven by the same NIST KAT `sb`/BearSSL pass — and (b) the by-spec packet/ARQ/
+Wire-compatibility with the native `sb` side rests on (a) identical AES-GCM --
+proven by the same NIST KAT `sb`/BearSSL pass -- and (b) the by-spec packet/ARQ/
 frame formats. The lossy-reorder ARQ sim is the port of `test/arq.sh`. A live
 Python<->`sb` cross-impl test needs a Linux container (see task #26) and is
 covered separately.
@@ -32,7 +32,7 @@ from shell_bucket.backhaul import (
 
 def encode_answer(nonce: bytes, cands: list[tuple[str, int]]) -> bytes:
     """Mux-side UP:A encoder. The wrapper only ever *decodes* answers (the mux
-    answers), so this lives here as a test helper — the inverse of the production
+    answers), so this lives here as a test helper -- the inverse of the production
     `decode_answer` it round-trips against. Mirror of the V `encode_answer`."""
     import base64
 
@@ -42,7 +42,7 @@ def encode_answer(nonce: bytes, cands: list[tuple[str, int]]) -> bytes:
 
 
 def test_nist_aesgcm_kat():
-    # NIST GCM test case 2 — identical to what BearSSL/`sb __cryptotest` produces,
+    # NIST GCM test case 2 -- identical to what BearSSL/`sb __cryptotest` produces,
     # so the AEAD (hence every packet) is wire-compatible.
     key, iv, pt = b"\x00" * 16, b"\x00" * 12, b"\x00" * 16
     out = AESGCM(key).encrypt(iv, pt, b"")
@@ -55,15 +55,15 @@ def test_packet_codec_roundtrip():
     pkt = udp_seal(key, 1, 0x0102030405060708, b"hello frame")
     res = udp_open(key, 1, pkt)
     assert res == (0x0102030405060708, b"hello frame")
-    assert udp_open(key, 2, pkt) is None  # wrong direction salt → tag fails
+    assert udp_open(key, 2, pkt) is None  # wrong direction salt -> tag fails
     bad = bytearray(pkt)
     bad[10] ^= 0xFF
-    assert udp_open(key, 1, bytes(bad)) is None  # tamper → tag fails
+    assert udp_open(key, 1, bytes(bad)) is None  # tamper -> tag fails
     assert udp_open(key, 1, pkt[:-1]) is None  # truncation
 
 
 def _run_arq_sim(loss_pct: int) -> tuple[bytes, bytes]:
-    """128KB A→B over a seeded lossy/reordering channel on a virtual clock."""
+    """128KB A->B over a seeded lossy/reordering channel on a virtual clock."""
     key = bytes((i * 7 + 9) & 0xFF for i in range(32))
     a, b = Arq(key, 1, 2), Arq(key, 2, 1)
     n = 128 * 1024
@@ -165,7 +165,7 @@ async def test_udp_backhaul_punch_and_transfer_loopback():
 @pytest.mark.asyncio
 async def test_udp_backhaul_liveness_death_detection(monkeypatch):
     # Two backhauls punch and stay up via heartbeats; when one dies, the other
-    # detects the silence and begins the lossless revert ("reverting" — it then
+    # detects the silence and begins the lossless revert ("reverting" -- it then
     # waits for the peer's in-band UP:RX to finish the handoff). Timeouts shrunk.
     import shell_bucket.backhaul as m
 
@@ -186,7 +186,7 @@ async def test_udp_backhaul_liveness_death_detection(monkeypatch):
         # Heartbeats keep it alive: still up well past one heartbeat interval.
         await asyncio.sleep(0.1)
         assert bh_a.state == "up"
-        # Peer dies → A sees no more packets → begins revert within ~BH_DEAD_MS.
+        # Peer dies -> A sees no more packets -> begins revert within ~BH_DEAD_MS.
         bh_b.close()
         assert await _await_state(bh_a, "reverting", tries=100)
     finally:
@@ -226,7 +226,7 @@ class _FakeLoop:
 
 def _wire_inband(a: UdpBackhaul, b: UdpBackhaul, got_a: list, got_b: list):
     """Model the durable in-band channel between two backhauls as a deferred queue
-    (no synchronous re-entrancy — mirrors the real APC wire). Returns a drain fn."""
+    (no synchronous re-entrancy -- mirrors the real APC wire). Returns a drain fn."""
     q: list = []
 
     def inband_for(dst: UdpBackhaul, sink: list):
@@ -253,7 +253,7 @@ def _wire_inband(a: UdpBackhaul, b: UdpBackhaul, got_a: list, got_b: list):
 def test_udp_backhaul_lossless_revert_exactly_once(prune_acks):
     # a streams frames to b; the UDP path dies after only a PREFIX is delivered.
     # The lossless revert must hand off the undelivered tail in-band so b ends up
-    # with every frame exactly once, in order — whether or not a's send FIFO was
+    # with every frame exactly once, in order -- whether or not a's send FIFO was
     # pruned by acks (prune_acks=False proves the peer's count, not the ARQ ack,
     # is authoritative, so no already-delivered frame is duplicated).
     key = bytes((i * 7 + 13) & 0xFF for i in range(32))
@@ -267,13 +267,13 @@ def test_udp_backhaul_lossless_revert_exactly_once(prune_acks):
         x.state = "up"
     drain = _wire_inband(a, b, got_a, got_b)
 
-    # Random ~2 KB frames so DEFLATE can't collapse them to a single segment —
+    # Random ~2 KB frames so DEFLATE can't collapse them to a single segment --
     # the stream spans many packets, making a partial (prefix) delivery realistic.
     frames = [f"R{i}:".encode() + os.urandom(2000) for i in range(24)]
     for f in frames:
         a.send_frame(f)
 
-    # Deliver only the first half of a's packets to b (a contiguous prefix → b
+    # Deliver only the first half of a's packets to b (a contiguous prefix -> b
     # cleanly consumes a prefix of frames; the rest are the undelivered tail).
     pkts = a.sock.out
     a.sock.out = []
@@ -290,7 +290,7 @@ def test_udp_backhaul_lossless_revert_exactly_once(prune_acks):
         a._prune()
         assert a.tx_base == b.rx_frames  # FIFO pruned to exactly the acked prefix
 
-    # The UDP path dies → a begins the in-band handoff; the queue cascade completes it.
+    # The UDP path dies -> a begins the in-band handoff; the queue cascade completes it.
     a._begin_revert()
     drain()
 

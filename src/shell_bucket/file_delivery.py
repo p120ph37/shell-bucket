@@ -9,7 +9,7 @@ e.g. `FILEREQ:imgcat:mtime=1700000000:os=Linux:arch=aarch64`. The `<name>` may
 itself be a path (e.g. `linux_arm64/sb`). Recognized flags: `mtime`, `os`,
 `arch` (unknown flags are ignored, forward-compatibly).
 
-Resolution (os/arch normalized — `Darwin→darwin`, `aarch64→arm64`, …), first
+Resolution (os/arch normalized -- `Darwin->darwin`, `aarch64->arm64`, ...), first
 hit wins, all confined to the bucket root:
 
     <bucket>/<os>_<arch>/<name>     os + arch specific
@@ -17,14 +17,14 @@ hit wins, all confined to the bucket root:
     <bucket>/<name>                 fully agnostic (also where an explicit
                                     `<os>_<arch>/path` name resolves)
 
-Response framing — base64 body lines then exactly one `~` control token line:
+Response framing -- base64 body lines then exactly one `~` control token line:
 
   ~EOF [flags...]    Success. Flags are `key=value`, space-separated:
                        chmod=<spec>  pass to `chmod` (only when the source file
-                                     is itself executable — the bucket holds
+                                     is itself executable -- the bucket holds
                                      non-exec files too, e.g. sb-bash.rc).
                        mtime=<N>     source mtime; the stub `touch -d @N`s the
-                                     cache so a later same-mtime FILEREQ → NOT_CHANGED.
+                                     cache so a later same-mtime FILEREQ -> NOT_CHANGED.
   ~ERR <CODE> [detail]  NOT_FOUND | NOT_CHANGED (more may be added).
 
 `~` is in neither base64 alphabet, so a token line can't collide with the body.
@@ -32,7 +32,7 @@ Response framing — base64 body lines then exactly one `~` control token line:
 Bucket symlinks are NOT a wire concept: the wrapper pre-flattens each symlink
 chain to its terminal in `sb-manifest` (a 4th `<link-target>` column; see
 `Bucket.manifest_text`), so `sb` fetches the real file once and materializes the
-applet links locally — busybox-style dedup with no runtime symlink chase.
+applet links locally -- busybox-style dedup with no runtime symlink chase.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-# Control tokens — always `~`-prefixed; never collide with base64.
+# Control tokens -- always `~`-prefixed; never collide with base64.
 EOF_TOKEN = b"~EOF"
 ERR_TOKEN = b"~ERR"
 
@@ -51,13 +51,13 @@ ERR_TOKEN = b"~ERR"
 ERR_NOT_FOUND = "NOT_FOUND"
 ERR_NOT_CHANGED = "NOT_CHANGED"
 
-# Mtime sentinel meaning "no cached copy yet" — wrapper always sends payload.
+# Mtime sentinel meaning "no cached copy yet" -- wrapper always sends payload.
 NO_CACHE_MTIME = 0
 
 # Column width of base64 lines on the wire (RFC 2045 standard).
 _LINE_WIDTH = 76
 
-# uname -m → canonical arch subdir token (passthrough for unknowns).
+# uname -m -> canonical arch subdir token (passthrough for unknowns).
 _ARCH_MAP = {
     "x86_64": "amd64",
     "amd64": "amd64",
@@ -180,7 +180,7 @@ class Bucket:
         return real if real.is_file() else None
 
     def resolve(self, req: FileRequest) -> Path | None:
-        """First matching path for the request (os_arch → os → root), or None."""
+        """First matching path for the request (os_arch -> os -> root), or None."""
         candidates: list[str] = []
         if req.os and req.arch:
             candidates.append(f"{normalize_os(req.os)}_{normalize_arch(req.arch)}/{req.name}")
@@ -196,7 +196,7 @@ class Bucket:
     def serve(self, req: FileRequest) -> bytes:
         """Build the in-band response for `req`.
 
-        miss → NOT_FOUND; mtime match → NOT_CHANGED; else payload with `mtime=`
+        miss -> NOT_FOUND; mtime match -> NOT_CHANGED; else payload with `mtime=`
         and (only if the source is executable) `chmod=+x`.
         """
         path = self.resolve(req)
@@ -211,7 +211,7 @@ class Bucket:
         return encode_for_delivery(path.read_bytes(), flags=tuple(flags))
 
     def alias_names(self) -> list[str]:
-        """Sorted unique basenames of executable files across the tree —
+        """Sorted unique basenames of executable files across the tree --
         excluding reserved binaries and the rc.d fragments. This is the dispatch
         set `sb mux` exposes as PATH symlinks; `sb` derives the same selection
         from `sb-manifest` on-target (this is the wrapper-side reference)."""
@@ -224,7 +224,7 @@ class Bucket:
             rel = p.relative_to(self.path)
             if rel.parts and rel.parts[0] == "rc.d":
                 continue
-            # Executable + not rc.d ⇒ dispatchable, with only the `sb` binary reserved
+            # Executable + not rc.d => dispatchable, with only the `sb` binary reserved
             # (the autoviv self-target). Executable `sb-*` SCRIPTS like the `sb-tmux.sh`
             # launcher ARE dispatchable (autoviv via $PATH). The non-exec runtimes
             # (`sb-*.rc`) / manifest are already excluded by the `os.access(X_OK)` filter
@@ -250,7 +250,7 @@ class Bucket:
 
         This is the busybox-style dedup primitive: the wrapper flattens each
         symlink chain to its terminal *here*, so the on-target `sb` fetches the
-        real binary once and materializes the applet links to it locally — no
+        real binary once and materializes the applet links to it locally -- no
         runtime chase, and one copy instead of N. Chains escaping the bucket (or
         dangling / pointing at a dir) are not served as links."""
         if not p.is_symlink():
@@ -263,16 +263,16 @@ class Bucket:
         if not real.is_file():
             return None
         if real != root and root not in real.parents:
-            return None  # escapes the bucket → don't serve
+            return None  # escapes the bucket -> don't serve
         return real.relative_to(root).as_posix()
 
     def manifest_text(self) -> str:
-        """The `sb-manifest` contents: one TSV line per bucket file —
+        """The `sb-manifest` contents: one TSV line per bucket file --
         `<path>\\t<mtime>\\t<flags>[\\t<link-target>]`. `flags` is `x` if
         executable; a 4th `<link-target>` field (terminal bucket-relative path)
         marks an in-bucket symlink, and its `flags` carry the *terminal's* exec
         bit (so an applet link stays dispatchable). Covers every file (helpers,
-        `sb-<family>.rc`, the `sb` binary, rc.d/…) except the manifest itself.
+        `sb-<family>.rc`, the `sb` binary, rc.d/...) except the manifest itself.
         This is the on-target freshness oracle `sb` parses; the format mirrors
         the V `parse_manifest`.
         """
@@ -282,11 +282,11 @@ class Bucket:
         for p in sorted(self.path.rglob("*")):
             # A symlink is served ONLY as a link entry to an in-bucket terminal.
             # is_file() follows the link, so without this branch a symlink-to-file
-            # would be emitted either as a duplicate full copy (in-bucket — the
+            # would be emitted either as a duplicate full copy (in-bucket -- the
             # very duplication the link entry avoids) or, worse, as a copy of a
             # file OUTSIDE the bucket (`serve` would refuse it anyway, so listing
             # it only yields a failed fetch). Skip any symlink with no in-bucket
-            # terminal (escaping / dangling / →dir).
+            # terminal (escaping / dangling / ->dir).
             if p.is_symlink():
                 link = self._link_target(p)
                 if link is None:

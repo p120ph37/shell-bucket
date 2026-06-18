@@ -14,7 +14,7 @@ def _runner() -> CliRunner:
     return CliRunner()
 
 
-# ───── group shape ──────────────────────────────────────────────────────────
+# ----- group shape ----------------------------------------------------------
 
 
 def test_cli_is_a_group_with_wrap_and_fetch_tmux() -> None:
@@ -23,12 +23,12 @@ def test_cli_is_a_group_with_wrap_and_fetch_tmux() -> None:
     assert result.exit_code == 0
     assert "wrap" in result.output
     assert "fetch-tmux" in result.output
-    # The SSH-specific verbs are gone — it's a generic tty wrapper now.
+    # The SSH-specific verbs are gone -- it's a generic tty wrapper now.
     assert "connect" not in result.output
     assert "download" not in result.output
 
 
-# ───── wrap: argv handling ────────────────────────────────────────────────────
+# ----- wrap: argv handling ----------------------------------------------------
 
 
 def test_wrap_requires_a_command() -> None:

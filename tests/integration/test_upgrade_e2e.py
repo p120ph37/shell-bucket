@@ -1,8 +1,8 @@
-"""End-to-end UDP-backhaul UPGRADE: wrapper-side ↔ a real `sb` mux upgrade.
+"""End-to-end UDP-backhaul UPGRADE: wrapper-side <-> a real `sb` mux upgrade.
 
 Runs the wrapper-side driver and a real `sb __upgradeserve` in one Linux container
-(loopback UDP, so the punch trivially succeeds and no Docker host↔container UDP is
-needed), exercising the full in-band-signaled offer→answer→punch→frames-over-UDP
+(loopback UDP, so the punch trivially succeeds and no Docker host<->container UDP is
+needed), exercising the full in-band-signaled offer->answer->punch->frames-over-UDP
 path. See upgrade_e2e_driver.py.
 """
 
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.integration
 _REPO = Path(__file__).resolve().parents[2]
 _ARCH = "arm64" if platform.machine() in ("arm64", "aarch64") else "amd64"
 # The instrumented binary (dist-test/, SB_TEST=1): `__upgradeserve` lives only
-# there — production (dist/) strips the self-test hooks.
+# there -- production (dist/) strips the self-test hooks.
 _SB = _REPO / f"native/sb/dist-test/linux_{_ARCH}/sb"
 
 

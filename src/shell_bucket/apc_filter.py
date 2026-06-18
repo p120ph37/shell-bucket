@@ -4,7 +4,7 @@ Intercepts `ESC _ ... ST` sequences in a byte stream from the remote. Sequences
 whose payload is `shell-bucket:<cmd>` are stripped from the forwarded output and
 `<cmd>` emitted as an event. The byte-stream APC carries no token: trust is
 structural, not bearer-based. The only thing that can put an our-prefix
-APC into the stream the wrapper reads is the host `sb mux` — every mux strips
+APC into the stream the wrapper reads is the host `sb mux` -- every mux strips
 our-prefix APCs out of its own forkpty child (`strip-at-source`), so a malicious
 app in the session cannot forge a request by emitting our escape (the mux eats
 it before it can climb). The token lives only on the per-host Unix socket,
@@ -55,8 +55,8 @@ class APCFilter:
 
     `feed(chunk)` returns `(bytes_to_forward, list_of_events)`. Each event is the
     `<cmd>` part of a `shell-bucket:<cmd>` APC (prefix-only recognition; no token
-    on the wire). Foreign APCs — anything not `shell-bucket:`-prefixed
-    — are forwarded verbatim and never emitted.
+    on the wire). Foreign APCs -- anything not `shell-bucket:`-prefixed
+    -- are forwarded verbatim and never emitted.
     """
 
     def __init__(self) -> None:
@@ -86,7 +86,7 @@ class APCFilter:
                 self._state = _State.APC
                 self._buf.append(_APC_INTRO)
             else:
-                # Not an APC introducer — emit the buffered ESC plus this byte.
+                # Not an APC introducer -- emit the buffered ESC plus this byte.
                 out.extend(self._buf)
                 out.append(b)
                 self._buf.clear()

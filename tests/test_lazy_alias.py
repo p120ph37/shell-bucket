@@ -19,7 +19,7 @@ from shell_bucket.lazy_alias import (
     shell_family,
 )
 
-# The per-host token is minted by `sb mux` (V) now — there is no Python token to
+# The per-host token is minted by `sb mux` (V) now -- there is no Python token to
 # bake, so the builders take only the shell/session. (See native/sb `make_token`.)
 
 
@@ -31,7 +31,7 @@ def _bash_parse_ok(content: bytes) -> None:
     assert r.returncode == 0, r.stderr.decode()
 
 
-# ───── small helpers ────────────────────────────────────────────────────────
+# ----- small helpers --------------------------------------------------------
 
 @pytest.mark.parametrize("name", ["imgcat", "my-tool", "_foo", "a1"])
 def test_valid_names(name: str) -> None:
@@ -58,13 +58,13 @@ def test_shell_family(shell: str, family: str) -> None:
     assert family in SHELL_FAMILIES
 
 
-# ───── bootstrap ─────────────────────────────────────────────────────────────
+# ----- bootstrap -------------------------------------------------------------
 
 def test_bootstrap_bakes_shell_not_token() -> None:
     b = build_bootstrap("/usr/bin/bash")
     assert "SB_SHELL='/usr/bin/bash'" in b
-    # No token anywhere — the mux mints its own and ignores the env; reuse is
-    # the explicit `sb mux --token=…`, never an inherited SB_TOKEN.
+    # No token anywhere -- the mux mints its own and ignores the env; reuse is
+    # the explicit `sb mux --token=...`, never an inherited SB_TOKEN.
     assert "SB_TOKEN" not in b
     assert "uname -s" in b and "uname -m" in b
 
@@ -113,7 +113,7 @@ def test_bootstrap_begin_still_parses() -> None:
     _bash_parse_ok(build_bootstrap("bash", begin=True).encode() + b"\n")
 
 
-# ───── tmux prologue (bootstrap + `exec sb mux --tmux=…`) ───────────────
+# ----- tmux prologue (bootstrap + `exec sb mux --tmux=...`) ---------------
 
 def test_tmux_prologue_is_bootstrap_plus_exec_launcher() -> None:
     p = build_tmux_prologue("work", "/bin/bash")
@@ -121,7 +121,7 @@ def test_tmux_prologue_is_bootstrap_plus_exec_launcher() -> None:
     assert p == build_bootstrap("/bin/bash", mux_args="--exec=sb-tmux.sh work")
     assert "SB_SHELL='/bin/bash'" in p and "SB_TOKEN" not in p
     assert 'exec "$SB_CACHE/sb" mux --exec=sb-tmux.sh work' in p
-    # No tmux machinery in the shell — it all lives in the fetchable launcher now.
+    # No tmux machinery in the shell -- it all lives in the fetchable launcher now.
     assert "command -v tmux" not in p
     assert "sb run tmux" not in p
     assert "allow-passthrough" not in p
@@ -131,7 +131,7 @@ def test_tmux_prologue_is_bootstrap_plus_exec_launcher() -> None:
 
 def test_tmux_prologue_policy_flags() -> None:
     # Each `[tmux]` policy maps to a launcher `--no-*` flag, present only when it's OFF
-    # — so the all-on default is a clean `--exec=sb-tmux.sh <session>`.
+    # -- so the all-on default is a clean `--exec=sb-tmux.sh <session>`.
     assert "--no-" not in build_tmux_prologue("w", "bash")
     p = build_tmux_prologue(
         "w", "bash", prefer_system=False, fetch_if_missing=False, fallback_without=False
@@ -176,10 +176,10 @@ def test_tmux_prologue_parses() -> None:
     )
 
 
-# ───── runtime body ─────────────────────────────────────────────────────────
+# ----- runtime body ---------------------------------------------------------
 
 def test_runtime_body_empty_without_rcd() -> None:
-    # No helpers, no fetch client, no sb() function — those are PATH symlinks /
+    # No helpers, no fetch client, no sb() function -- those are PATH symlinks /
     # the binary now. With no rc.d fragments the generated body is inert.
     body = generate_runtime_body()
     for absent in ("__sb_fetch", "__sb_run", "sb-refresh", "sb()", "sbssh()",
@@ -189,7 +189,7 @@ def test_runtime_body_empty_without_rcd() -> None:
 
 def test_runtime_body_rcd_via_sb_fetch() -> None:
     body = generate_runtime_body(rcd_fragments=["rc.d/00-x.sh", "rc.d/50-y.sh"])
-    # Fetch by side effect (NOT captured — sb's stdout is the protocol channel),
+    # Fetch by side effect (NOT captured -- sb's stdout is the protocol channel),
     # then source the agnostic cache path directly.
     assert 'command sb fetch "rc.d/00-x.sh" 2>/dev/null && . "$SB_CACHE/rc.d/00-x.sh"' in body
     assert 'command sb fetch "rc.d/50-y.sh" 2>/dev/null && . "$SB_CACHE/rc.d/50-y.sh"' in body
@@ -201,7 +201,7 @@ def test_runtime_body_parses() -> None:
     _bash_parse_ok(generate_runtime_body().encode())
 
 
-# ───── render_rc_file (marker preservation) ─────────────────────────────────
+# ----- render_rc_file (marker preservation) ---------------------------------
 
 def test_render_missing_uses_preamble() -> None:
     rc = render_rc_file("bash", existing=None, rcd_fragments=["rc.d/00-x.sh"])

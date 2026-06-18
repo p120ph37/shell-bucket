@@ -32,7 +32,7 @@ def _tarball(member_name: str = "tmux", body: bytes = _ELF) -> bytes:
     return buf.getvalue()
 
 
-# ───── naming / mapping ──────────────────────────────────────────────────────
+# ----- naming / mapping ------------------------------------------------------
 
 def test_platform_map_matches_bucket_subdirs() -> None:
     assert PLATFORMS["linux-x86_64"] == "linux_amd64"
@@ -53,7 +53,7 @@ def test_asset_url_keeps_tag_in_path() -> None:
     )
 
 
-# ───── extract ────────────────────────────────────────────────────────────────
+# ----- extract ----------------------------------------------------------------
 
 def test_extract_tmux_pulls_binary() -> None:
     assert extract_tmux(_tarball()) == _ELF
@@ -69,7 +69,7 @@ def test_extract_tmux_rejects_non_executable() -> None:
         extract_tmux(_tarball(body=b"<html>404</html>"))
 
 
-# ───── install ────────────────────────────────────────────────────────────────
+# ----- install ----------------------------------------------------------------
 
 def test_install_tmux_writes_executable(tmp_path: Path) -> None:
     dest = install_tmux(tmp_path, "linux_arm64", _ELF)
@@ -79,7 +79,7 @@ def test_install_tmux_writes_executable(tmp_path: Path) -> None:
     assert not (tmp_path / "linux_arm64" / "tmux.partial").exists()  # atomic move
 
 
-# ───── fetch_tmux (download injected) ────────────────────────────────────────
+# ----- fetch_tmux (download injected) ----------------------------------------
 
 def test_fetch_tmux_all_platforms(tmp_path: Path) -> None:
     def fake_download(url: str) -> bytes:

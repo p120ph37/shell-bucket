@@ -1,11 +1,11 @@
 """Wrapper-host paths for shell-bucket.
 
 Everything lives under a single user-visible tree, ``~/.shell-bucket/`` (like
-``~/.ssh/``), not an XDG split — users prefer one tree. Override the root with
+``~/.ssh/``), not an XDG split -- users prefer one tree. Override the root with
 ``$SHELL_BUCKET_HOME`` (used by tests).
 
   ~/.shell-bucket/
-    config.toml      wrapper defaults — local-only, never served
+    config.toml      wrapper defaults -- local-only, never served
     bucket/          THE SERVED TREE (the FILEREQ namespace; path-confined)
 
 The served *bucket* is deliberately a subdirectory: the wrapper resolves every
@@ -13,7 +13,7 @@ FILEREQ path within it, so wrapper-local files (config) must sit *outside* it
 and can never be fetched.
 
 Host-key trust is no longer the wrapper's concern: the wrapped tty tool (ssh,
-ECS Execute Command, …) owns its own authentication and host verification.
+ECS Execute Command, ...) owns its own authentication and host verification.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def config_path() -> Path:
 def load_config() -> dict:
     """Parse ``config.toml`` into a dict (``{}`` if absent or unparseable).
 
-    Config is optional — a missing or malformed file falls back to built-in
+    Config is optional -- a missing or malformed file falls back to built-in
     defaults rather than failing a connection.
     """
     path = config_path()

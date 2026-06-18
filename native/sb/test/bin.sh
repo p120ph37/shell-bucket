@@ -1,10 +1,10 @@
 # Self-tests for `sb mux` dispatch-dir population (no pty/network).
-#   sb __bintest <bindir> <self> <manifest>  → populate <bindir>
+#   sb __bintest <bindir> <self> <manifest>  -> populate <bindir>
 # The dispatch set is every executable manifest entry's basename, plus `sb`,
 # minus only `sb` itself + the (sourced) rc.d fragments. Executable `sb-*` SCRIPTS
 # (e.g. the sb-tmux.sh launcher) ARE included so they autovivify via $PATH; the
-# non-exec `.rc` runtimes / manifest fall out by the exec filter. Links → <self>.
-# Inspected with the shell (not os.ls — populate_bin prunes before it creates,
+# non-exec `.rc` runtimes / manifest fall out by the exec filter. Links -> <self>.
+# Inspected with the shell (not os.ls -- populate_bin prunes before it creates,
 # and os.ls under-reports same-process-created links in this static build).
 B=/b/sb
 D=/tmp/bin
@@ -26,9 +26,9 @@ printf '%s\n' \
 rm -rf "$D"
 $B __bintest "$D" "$S" "$M"
 ck "dispatch set (execs + sb-* scripts + sb; not .rc/rc.d/non-exec)" "imgcat it2copy sb sb-tmux.sh " "$(dir)"
-ck "imgcat → self"     "$S" "$(readlink "$D/imgcat")"
-ck "sb → self"         "$S" "$(readlink "$D/sb")"
-ck "sb-tmux.sh → self (autoviv launcher)" "$S" "$(readlink "$D/sb-tmux.sh")"
+ck "imgcat -> self"     "$S" "$(readlink "$D/imgcat")"
+ck "sb -> self"         "$S" "$(readlink "$D/sb")"
+ck "sb-tmux.sh -> self (autoviv launcher)" "$S" "$(readlink "$D/sb-tmux.sh")"
 ck "sb-bash.rc NOT dispatched"  "" "$(readlink "$D/sb-bash.rc" 2>/dev/null)"
 
 # Re-run with imgcat dropped + a new helper: prune imgcat, add other, keep sb.
@@ -39,10 +39,10 @@ $B __bintest "$D" "$S" "$M"
 ck "prune stale + add new" "it2copy other sb " "$(dir)"
 ck "imgcat pruned" "" "$(readlink "$D/imgcat" 2>/dev/null)"
 
-# A non-executable-only manifest → just `sb`.
+# A non-executable-only manifest -> just `sb`.
 printf 'myenvvars.sh\t70\t\n' > "$M"
 $B __bintest "$D" "$S" "$M"
-ck "exec-less manifest → sb only" "sb " "$(dir)"
+ck "exec-less manifest -> sb only" "sb " "$(dir)"
 
 # Stale entries left by a prior session (regular files + links) are all pruned.
 rm -rf "$D"; mkdir -p "$D"; touch "$D/oldfile"; ln -s /x "$D/oldlink"

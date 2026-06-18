@@ -4,7 +4,7 @@
 # xx cross-compiles at the compiler stage, so this runs on a single native
 # buildx builder with no QEMU. Override the arch set with SB_PLATFORMS.
 #
-# Production by default — no test scaffolding (every byte ships over the wire).
+# Production by default -- no test scaffolding (every byte ships over the wire).
 # Set SB_TEST=1 to build the INSTRUMENTED binary (the `__xxx` self-test hooks
 # compiled in) into ./dist-test instead; check.sh uses that for the V suite.
 set -eu

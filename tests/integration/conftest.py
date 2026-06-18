@@ -2,7 +2,7 @@
 
 Starts a session-scoped `linuxserver/openssh-server` container; tests reach it
 by wrapping the system `ssh` (via `sshpass` for the password) under the generic
-PTY transport — exactly as `shell-bucket wrap -- ssh …` would. Skips cleanly if
+PTY transport -- exactly as `shell-bucket wrap -- ssh ...` would. Skips cleanly if
 Docker (or sshpass) isn't available.
 """
 

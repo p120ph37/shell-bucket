@@ -1,6 +1,6 @@
 """Unit tests for the generic PTY command transport.
 
-These spawn real, tiny POSIX commands under a local pseudo-terminal — the same
+These spawn real, tiny POSIX commands under a local pseudo-terminal -- the same
 machinery `shell-bucket wrap` uses for ssh / ECS / bash / screen / anything that
 hands you a shell over a tty.
 """
@@ -29,7 +29,7 @@ async def _drain(proc, timeout: float = 5.0) -> bytes:
 
 
 def test_terminal_size_defaults_off_a_tty() -> None:
-    # Under pytest stdout isn't a tty → the documented 80x24 fallback.
+    # Under pytest stdout isn't a tty -> the documented 80x24 fallback.
     cols, rows = terminal_size()
     assert cols >= 1 and rows >= 1
 
@@ -56,7 +56,7 @@ async def test_writes_reach_the_child() -> None:
 
 
 async def test_write_eof_signals_end_of_input() -> None:
-    # `cat` copies stdin→stdout until EOF; write_eof sends the tty's VEOF.
+    # `cat` copies stdin->stdout until EOF; write_eof sends the tty's VEOF.
     async with CommandTransport(["cat"]) as proc:
         proc.stdin.write(b"abc\n")
         proc.stdin.write_eof()
@@ -66,7 +66,7 @@ async def test_write_eof_signals_end_of_input() -> None:
 
 
 async def test_initial_winsize_propagates_to_child() -> None:
-    # The slave starts at the wrapper's terminal size (80x24 off a tty) — stty
+    # The slave starts at the wrapper's terminal size (80x24 off a tty) -- stty
     # reports "rows cols".
     async with CommandTransport(["sh", "-c", "stty size"]) as proc:
         out = await _drain(proc)

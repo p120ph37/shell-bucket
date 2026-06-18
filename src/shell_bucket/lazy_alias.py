@@ -5,14 +5,14 @@ hop` **feed** over the pty into the shell they bring up. It detects
 `uname -s`/`-m`, fetches just the `sb` binary, then `exec`s `sb mux`. `sb mux`
 (in V) does the rest:
 fetches the `sb-manifest` and the `sb-<family>.rc` runtime, populates a PATH dir
-of busybox-style dispatch symlinks (one per helper, plus `sb` itself, all → the
+of busybox-style dispatch symlinks (one per helper, plus `sb` itself, all -> the
 binary), exports the session env, and launches the shell with the runtime as its
 rcfile.
 
 The runtime is a real, user-editable file in the bucket, regenerated on connect
 with a preserve-marker: the head (above the marker) is the user's shell-specific
 pre-extension setup; everything below is generated. Because helpers and `sb` are
-PATH symlinks (not shell functions), the generated body is thin — it only
+PATH symlinks (not shell functions), the generated body is thin -- it only
 fetches + sources the shell-agnostic `rc.d/` fragments (post-extension), each via
 the `sb` binary on PATH.
 
@@ -37,7 +37,7 @@ SHELL_FAMILIES = ("bash", "ksh", "zsh")
 
 # sb-<family>.rc preserve-marker: the head (above, incl. marker) is kept verbatim
 # on regeneration; everything below is regenerated.
-RC_MARKER = "# >>>> shell-bucket generated runtime — do not edit below this line >>>>"
+RC_MARKER = "# >>>> shell-bucket generated runtime -- do not edit below this line >>>>"
 
 
 def is_valid_helper_name(name: str) -> bool:
@@ -61,18 +61,18 @@ def shell_family(shell: str) -> str:
     return "bash"
 
 
-# ───── shell validation ───────────────────────────────────────────────────────
+# ----- shell validation -------------------------------------------------------
 
 def _check_shell(shell: str) -> None:
     if "'" in shell or ":" in shell or "\n" in shell:
         raise ValueError(f"shell contains unsafe characters: {shell!r}")
 
 
-# ───── in-band fetch (shared shell) ──────────────────────────────────────────
+# ----- in-band fetch (shared shell) ------------------------------------------
 
 # The one piece of the protocol that must live in shell (it runs before any `sb`
 # binary exists): a `__sb_fetch <name> <out>` that does one FILEREQ transaction
-# over the pty — emit the (token-free) APC, read the `~EOF`-framed base64 reply
+# over the pty -- emit the (token-free) APC, read the `~EOF`-framed base64 reply
 # with echo off, decode it onto the file, `chmod +x`. Deliberately minimal: it's
 # only called (gated by `[ -x ]`) to bootstrap the small, always-executable `sb`
 # binary, so it needs no `stat` (always a full mtime=0 fetch), no `touch` (sb mux
@@ -110,12 +110,12 @@ _INLINE_FETCH_FN = r"""__sb_fetch() {
 }"""
 
 
-# ───── the bootstrap (the single fed script) ─────────────────────────
+# ----- the bootstrap (the single fed script) -------------------------
 
 # The one script the wrapper / `sb hop` feed over the pty into the shell they bring up.
 # Minimal by design: detect os/arch (per-hop), FILEREQ the `sb` binary (os/arch as
 # flags so the wrapper resolves the os_arch subtree), reconcile it, then `exec sb
-# mux`. Everything else — manifest, runtime, PATH dispatch symlinks — `sb mux`
+# mux`. Everything else -- manifest, runtime, PATH dispatch symlinks -- `sb mux`
 # fetches/builds itself (in V). Baked with the shell by whoever feeds it; the
 # per-host token is minted by `sb mux`, not baked here.
 BOOTSTRAP_TEMPLATE = (
@@ -133,7 +133,7 @@ mkdir -p "$SB_CACHE"
 }
 export SB_SHELL
 # Let the (possibly slightly-stale) cached sb reconcile itself against the
-# manifest FIRST — if the bucket's sb is newer it re-fetches in place — so the
+# manifest FIRST -- if the bucket's sb is newer it re-fetches in place -- so the
 # `exec` below launches the up-to-date binary this session. Best-effort: a plain
 # shell `;` (not `&&`) so we still exec even if the reconcile can't reach the
 # wrapper. Its stdout is the live protocol channel; stderr (path) is suppressed.
@@ -158,7 +158,7 @@ def build_bootstrap(shell: str, *, begin: bool = False, mux_args: str = "") -> s
     watches the fed shell's output for it to know the bootstrap is live (everything
     before is swallowed). `begin=False` omits it (for callers that only want to
     inspect/compare the script body). `mux_args` is appended to the final `exec sb
-    mux` — e.g. `--tmux=<session>` for the tmux launcher (see `build_tmux_prologue`).
+    mux` -- e.g. `--tmux=<session>` for the tmux launcher (see `build_tmux_prologue`).
     """
     _check_shell(shell)
     begin_line = _BEGIN_EMIT if begin else ":"
@@ -170,7 +170,7 @@ def build_bootstrap(shell: str, *, begin: bool = False, mux_args: str = "") -> s
     )
 
 
-# ───── tmux launcher prologue (sb mux owns the pty, forkpty's a tmux client) ──
+# ----- tmux launcher prologue (sb mux owns the pty, forkpty's a tmux client) --
 
 # The `--tmux` prologue is the plain bootstrap whose `exec sb mux` runs the
 # fetchable `sb-tmux.sh` launcher via `--exec=sb-tmux.sh <session>` (+ the `[tmux]`
@@ -178,7 +178,7 @@ def build_bootstrap(shell: str, *, begin: bool = False, mux_args: str = "") -> s
 # (autoviv'd through $PATH), not the sb binary: it resolves a tmux (system, else the
 # bucket's static one via `sb run tmux`), writes the pane config (`default-command` =
 # the tooled shell, `@sb-token` for reconnect, no `allow-passthrough`), and execs
-# `tmux new -A` — so `sb mux` is the parent that owns the ssh-pty + socket while tmux's
+# `tmux new -A` -- so `sb mux` is the parent that owns the ssh-pty + socket while tmux's
 # server daemonizes. `sb` itself is tmux-agnostic; screen/etc. can be peer launchers.
 _TMUX_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 
@@ -198,7 +198,7 @@ def build_tmux_prologue(
     fallback_without: bool = True,
 ) -> str:
     """The `--tmux` hop-1 script: the plain bootstrap, but its `exec sb mux` runs the
-    fetchable `sb-tmux.sh` launcher via `--exec`. `sb` stays tmux-agnostic — the
+    fetchable `sb-tmux.sh` launcher via `--exec`. `sb` stays tmux-agnostic -- the
     launcher (autoviv'd through $PATH) does all the tmux work.
 
     `prefer_system` / `fetch_if_missing` / `fallback_without` map to the launcher's
@@ -216,7 +216,7 @@ def build_tmux_prologue(
     return build_bootstrap(shell, begin=begin, mux_args=" ".join(argv))
 
 
-# ───── runtime (the generated body of sb-<family>.rc) ────────────────────────
+# ----- runtime (the generated body of sb-<family>.rc) ------------------------
 
 # Sourced by the shell `sb mux` launches (as its rcfile). Thin by design: helpers
 # and `sb` are PATH symlinks to the `sb` binary that `sb mux` populates, and the
@@ -228,14 +228,14 @@ def generate_runtime_body(rcd_fragments: Sequence[str] = ()) -> str:
     fragments (post-extension), each via the `sb` binary on PATH.
 
     `sb fetch` ensures the fragment is cached (exit status says whether) but its
-    stdout is the live protocol channel — capturing it (`$(sb fetch …)`) would
+    stdout is the live protocol channel -- capturing it (`$(sb fetch ...)`) would
     swallow the FILEREQ and hang. So we fetch by side effect, suppress its stderr
     path print, and source the agnostic cache path (`$SB_CACHE/<frag>`) directly.
     """
     if not rcd_fragments:
         return "# (no rc.d fragments)\n"
     parts = [
-        "# rc.d fragments — shell-agnostic post-extension setup, fetched +",
+        "# rc.d fragments -- shell-agnostic post-extension setup, fetched +",
         "# sourced via the sb binary on PATH.",
     ]
     for frag in rcd_fragments:
@@ -245,7 +245,7 @@ def generate_runtime_body(rcd_fragments: Sequence[str] = ()) -> str:
 
 def _preamble(family: str) -> str:
     return (
-        f"# sb-{family}.rc — shell-bucket {family} runtime, in your bucket.\n"
+        f"# sb-{family}.rc -- shell-bucket {family} runtime, in your bucket.\n"
         "# Regenerated on connect: everything BELOW the marker is overwritten;\n"
         "# add your own (shell-specific, pre-extension) customizations ABOVE it.\n"
         f"{RC_MARKER}"
@@ -263,7 +263,7 @@ def render_rc_file(
 
     `existing` is the current file text (None if absent). With a marker present,
     the head up to and including it is kept; without one, any existing content is
-    preserved as head and the marker appended; absent → a default preamble.
+    preserved as head and the marker appended; absent -> a default preamble.
     """
     if family != "bash":
         body = (

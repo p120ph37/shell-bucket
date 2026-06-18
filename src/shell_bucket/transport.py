@@ -2,9 +2,9 @@
 
 shell-bucket is about generic ttys, not SSH specifically. The wrapper bridges a
 byte stream to/from *some* process that owns a terminal at the other end; how
-that process is produced is this module's concern. The user names the tool —
-``ssh user@host``, ``aws ecs execute-command …``, ``bash``, ``screen``,
-``it2-ssh``, anything that gives a shell over a tty — and `CommandTransport`
+that process is produced is this module's concern. The user names the tool --
+``ssh user@host``, ``aws ecs execute-command ...``, ``bash``, ``screen``,
+``it2-ssh``, anything that gives a shell over a tty -- and `CommandTransport`
 runs it under a local pseudo-terminal so it behaves exactly as it would if you
 had typed it yourself.
 
@@ -102,14 +102,14 @@ class _PtyProcess:
         self.stdin = _Stdin(self)
         self.stdout = _Stdout(self)
 
-    # ── read side ──────────────────────────────────────────────────────────
+    # -- read side ----------------------------------------------------------
     def _on_readable(self) -> None:
         try:
             data = os.read(self._fd, 65536)
         except BlockingIOError:
             return
         except OSError:
-            data = b""  # master EOF / slave hung up → child is gone
+            data = b""  # master EOF / slave hung up -> child is gone
         if data:
             self._rbuf.extend(data)
         else:
@@ -132,7 +132,7 @@ class _PtyProcess:
             return chunk
         return b""
 
-    # ── write side ─────────────────────────────────────────────────────────
+    # -- write side ---------------------------------------------------------
     def _write(self, data: bytes) -> None:
         if self._closed or not data:
             return
@@ -188,7 +188,7 @@ class _PtyProcess:
         with contextlib.suppress(OSError):
             os.write(self._fd, veof)
 
-    # ── control ──────────────────────────────────────────────────────────────
+    # -- control --------------------------------------------------------------
     def change_terminal_size(self, cols: int, rows: int) -> None:
         _set_winsize(self._fd, cols, rows)
 
@@ -212,7 +212,7 @@ class _PtyProcess:
         self._disarm_writer()
         with contextlib.suppress(Exception):
             self._loop.remove_reader(self._fd)
-        # Child usually exited already (its slave hung up → our master read EOF).
+        # Child usually exited already (its slave hung up -> our master read EOF).
         # If not, hang it up, then reap so `returncode` is real.
         self._reap(blocking=False)
         if self.returncode is None:
@@ -260,7 +260,7 @@ class CommandTransport:
             try:
                 os.execvp(self._argv[0], self._argv)
             except OSError:
-                os._exit(127)  # exec failure → conventional "command not found"
+                os._exit(127)  # exec failure -> conventional "command not found"
         # Set the window size from the parent only. Doing it in the child too
         # would race a later `change_terminal_size` (the child's set could land
         # after a resize and clobber it back). The master-side set propagates to

@@ -5,7 +5,7 @@ Plays the wrapper side against a real `sb __upgradeserve`: mints a PSK, gathers 
 candidate, sends the `UP:O:` offer over the in-band channel (the subprocess's
 stdin), receives the mux's `UP:A:` answer (its stdout), establishes the UDP
 backhaul via the real punch on loopback, and verifies a frame round-trips over
-UDP (the mux echoes it). Exercises the full offer→answer→punch→frames-over-UDP
+UDP (the mux echoes it). Exercises the full offer->answer->punch->frames-over-UDP
 path with the real signaling codec, start_backhaul, Backhaul, and UdpBackhaul.
 """
 
@@ -43,7 +43,7 @@ async def main() -> None:
         sb.stdin.write(apc_envelope(b"UP:O:" + encode_offer(psk, nonce, [], my_cands)))
         await sb.stdin.drain()
 
-        # Receive the mux's UP:A answer (APC on its stdout) → establish the backhaul.
+        # Receive the mux's UP:A answer (APC on its stdout) -> establish the backhaul.
         got: list[bytes] = []
         bh = None
         apc = APCFilter()

@@ -18,10 +18,10 @@ from shell_bucket.wrapper import run_session
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
-    """shell-bucket — wrap any tty tool with lazy helper delivery + iTerm2 integration."""
+    """shell-bucket -- wrap any tty tool with lazy helper delivery + iTerm2 integration."""
 
 
-# ─── wrap ────────────────────────────────────────────────────────────────────
+# --- wrap --------------------------------------------------------------------
 
 
 @cli.command(
@@ -29,11 +29,11 @@ def cli() -> None:
     help=(
         "Wrap any tty tool to bring your tooling into the session "
         "(RC + lazy helpers + sb propagation).\n\n"
-        "The tool is whatever gives you a shell over a terminal — ssh, "
-        "aws ecs execute-command, docker exec -it, bash, screen, … — given after `--`:\n\n"
+        "The tool is whatever gives you a shell over a terminal -- ssh, "
+        "aws ecs execute-command, docker exec -it, bash, screen, ... -- given after `--`:\n\n"
         "\b\n"
         "  shell-bucket wrap -- ssh user@host\n"
-        "  shell-bucket wrap -- aws ecs execute-command --cluster c --command /bin/bash …\n"
+        "  shell-bucket wrap -- aws ecs execute-command --cluster c --command /bin/bash ...\n"
         "  shell-bucket wrap -- bash\n"
         "\n"
         "Authentication and host-key handling are the tool's own concern; the wrapper "
@@ -82,7 +82,7 @@ def wrap(tmux_session: str | None, shell: str, command: tuple[str, ...]) -> None
     sys.exit(rc)
 
 
-# ─── fetch-tmux ─────────────────────────────────────────────────────────────
+# --- fetch-tmux -------------------------------------------------------------
 
 
 @cli.command(
@@ -130,7 +130,7 @@ def fetch_tmux_cmd(version: str | None, platforms: tuple[str, ...], source: str)
         click.echo(f"shell-bucket: fetch-tmux failed: {e}", err=True)
         sys.exit(1)
     for platform, path in installed:
-        click.echo(f"shell-bucket: {platform} → {path}")
+        click.echo(f"shell-bucket: {platform} -> {path}")
 
 
 if __name__ == "__main__":

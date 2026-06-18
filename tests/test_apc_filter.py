@@ -25,7 +25,7 @@ def _filter() -> APCFilter:
     return APCFilter()
 
 
-# ───── Basic pass-through ───────────────────────────────────────────────────
+# ----- Basic pass-through ---------------------------------------------------
 
 def test_empty_input() -> None:
     out, events = _filter().feed(b"")
@@ -46,7 +46,7 @@ def test_binary_bytes_pass_through() -> None:
     assert events == []
 
 
-# ───── Our APC (prefix match): capture, prefix stripped ─────────────────────
+# ----- Our APC (prefix match): capture, prefix stripped ---------------------
 
 def test_our_apc_is_stripped_and_cmd_emitted() -> None:
     out, events = _filter().feed(_ours(b"FILEREQ:imgcat:0"))
@@ -73,10 +73,10 @@ def test_multiple_apcs_in_one_chunk() -> None:
     assert events == [b"BEGIN", b"FILEREQ:cat:0"]
 
 
-# ───── Prefix recognition: anything `shell-bucket:`-prefixed is ours ────────
+# ----- Prefix recognition: anything `shell-bucket:`-prefixed is ours --------
 
 def test_bare_prefix_emits_empty_command() -> None:
-    """`shell-bucket:` with nothing after → ours, an empty command."""
+    """`shell-bucket:` with nothing after -> ours, an empty command."""
     out, events = _filter().feed(_apc(PREFIX))
     assert out == b""
     assert events == [b""]
@@ -89,7 +89,7 @@ def test_payload_with_colons_kept_intact() -> None:
     assert events == [b"FILEREQ:x:mtime=0:os=Linux"]
 
 
-# ───── Foreign sequences: pass-through ──────────────────────────────────────
+# ----- Foreign sequences: pass-through --------------------------------------
 
 def test_foreign_prefix_apc_passes_through() -> None:
     """A `shell-bucket`-lookalike without the exact `shell-bucket:` prefix is foreign."""
@@ -133,7 +133,7 @@ def test_lone_esc_followed_by_non_apc_byte_passes_through() -> None:
     assert events == []
 
 
-# ───── Mixed streams ────────────────────────────────────────────────────────
+# ----- Mixed streams --------------------------------------------------------
 
 def test_mixed_stream_strips_only_ours() -> None:
     chunk = (
@@ -148,7 +148,7 @@ def test_mixed_stream_strips_only_ours() -> None:
     assert events == [b"FILEREQ:x:0"]
 
 
-# ───── Cross-chunk reassembly ───────────────────────────────────────────────
+# ----- Cross-chunk reassembly -----------------------------------------------
 
 def test_our_apc_split_in_half_across_chunks() -> None:
     full = _ours(b"FILEREQ:imgcat:9")
@@ -203,7 +203,7 @@ def test_esc_underscore_at_boundary_then_payload_in_next_chunk() -> None:
     assert ev2 == [b"BEGIN"]
 
 
-# ───── Payload edge cases ───────────────────────────────────────────────────
+# ----- Payload edge cases ---------------------------------------------------
 
 def test_esc_inside_payload_treated_as_data_when_not_followed_by_backslash() -> None:
     body = b"FILEREQ:a\x1bXb:0"
@@ -220,7 +220,7 @@ def test_foreign_apc_with_bel_terminator_passes_through() -> None:
     assert events == []
 
 
-# ───── State persistence across feeds ───────────────────────────────────────
+# ----- State persistence across feeds ---------------------------------------
 
 @pytest.mark.parametrize("split", [1, 2, 5, 10, 20])
 def test_payload_split_at_arbitrary_offsets(split: int) -> None:
@@ -232,7 +232,7 @@ def test_payload_split_at_arbitrary_offsets(split: int) -> None:
     assert ev1 + ev2 == [b"FILEREQ:p:0"]
 
 
-# ───── apc_envelope (the inverse of the filter) ─────────────────────────────
+# ----- apc_envelope (the inverse of the filter) -----------------------------
 
 def test_apc_envelope_format() -> None:
     assert apc_envelope(b"R0:hi") == _ours(b"R0:hi")

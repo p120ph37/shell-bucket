@@ -1,7 +1,7 @@
 # sb pass-through + env-driven-launch checks. No `set -e`: cases exit
 # non-zero on purpose (we assert the propagated code), which would abort the run.
 #
-# The pump is `sb __pumptest` — the pure pass-through pump in isolation (SB_SHELL /
+# The pump is `sb __pumptest` -- the pure pass-through pump in isolation (SB_SHELL /
 # SB_RC_FILE driven, no wrapper). `sb mux` wraps this with protocol startup
 # (mux_setup: manifest/runtime fetch + dispatch symlinks), exercised end-to-end
 # by the Python integration suite instead.
