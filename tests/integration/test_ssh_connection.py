@@ -58,7 +58,7 @@ async def _session(
     clean: bool = True,
     clean_extra: str = "",
 ) -> AsyncIterator[tuple[Process, bytes]]:
-    """Wrap `ssh` under the PTY transport and inject hop 1, exactly as production.
+    """Wrap `ssh` under the PTY transport and bring hop 1 up, exactly as production.
 
     Yields `(proc, initial)` — the bridged process and the post-BEGIN remainder.
     With `clean`, wipes the remote cache over the tty *before* feeding the
@@ -147,8 +147,8 @@ async def _drive(
     return (output, served-events).
 
     Once the runtime (sb-bash.rc) is served — the shell is coming up under sb —
-    sends `send_after_rc`. `initial` is any output already read past an injector's
-    BEGIN sync (the injected-hop-1 path) and is processed before the read loop.
+    sends `send_after_rc`. `initial` is any output already read past the BEGIN
+    sync (the fed-hop-1 path) and is processed before the read loop.
     """
     apc = APCFilter()
     out = bytearray()
@@ -205,7 +205,7 @@ async def _run_bootstrap(
 
 
 async def test_sb_bootstrap_runs_lazy_helper_end_to_end(ssh_server, tmp_path: Path) -> None:
-    """The wrapper injects hop 1 (feeds the bootstrap over a plain login shell);
+    """The wrapper brings hop 1 up (feeds the bootstrap over a plain login shell);
     the bootstrap fetches the real sb + runtime → `sb mux` launches the shell → a
     lazy alias fetches+runs through the multiplexer. The whole feed→fetch→mux flow,
     end to end, with no embed."""
@@ -330,7 +330,7 @@ async def test_mux_socket_fetch_through_byte_stream(ssh_server, tmp_path: Path) 
 
 async def test_mux_socket_framed_origin_reframes(ssh_server, tmp_path: Path) -> None:
     """The FRAMED-origin routing branch: a socket client sends an already-`R<inner>:`
-    tagged request (exactly what an `sb inject` conduit forwards when a deeper mux
+    tagged request (exactly what an `sb hop` conduit forwards when a deeper mux
     relays its child's fetch). The host mux must record `inner`, relay up under its
     OWN id, and re-frame the reply `R<inner>:<resp>` back as an APC. `__conduitfetch`
     sends `R9:FILEREQ:sbmark`, reads that APC, verifies its id is 9, and prints the
@@ -359,7 +359,7 @@ async def _drive_survey(
     deeper_send: bytes | None = None,
     timeout: float = 120.0,
 ) -> None:
-    """Bring the session up, (optionally) `sb inject` a deeper mux, then send a
+    """Bring the session up, (optionally) `sb hop` a deeper mux, then send a
     SURVEY down and pump until the topology has `want_routes` nodes. SURVEYR replies
     record into `server.topology`. The survey is sent once the relevant mux is up:
     on hop-1's rc fetch (raw), and — if `deeper_send` is given — after opening the
@@ -419,7 +419,7 @@ async def test_survey_single_hop(ssh_server, tmp_path: Path) -> None:
 
 
 async def test_survey_two_hop_routes(ssh_server, tmp_path: Path) -> None:
-    """With a deeper mux opened via `sb inject` (conduit), SURVEY fans out down the
+    """With a deeper mux opened via `sb hop` (conduit), SURVEY fans out down the
     conduit and BOTH muxes reply: the host mux with an empty route,
     the deeper mux with a one-element route (the host mux prepended its conduit's
     cid as it relayed the reply up). Proves fan-out + route accumulation."""
@@ -427,7 +427,7 @@ async def test_survey_two_hop_routes(ssh_server, tmp_path: Path) -> None:
     server = BootstrapServer(bucket=bucket)
     deeper = (
         b"mkdir -p /tmp/sbsurv && "
-        b"sb inject env SB_CACHE=/tmp/sbsurv/cache bash\n"
+        b"sb hop env SB_CACHE=/tmp/sbsurv/cache bash\n"
     )
     async with _session(
         ssh_server, _session_script("bash"), clean_extra="/tmp/sbsurv"
@@ -491,7 +491,7 @@ async def test_push_two_hop_addresses_deeper(ssh_server, tmp_path: Path) -> None
     server = BootstrapServer(bucket=bucket)
     deeper = (
         b"mkdir -p /tmp/sbpush && "
-        b"sb inject env SB_CACHE=/tmp/sbpush/cache bash\n"
+        b"sb hop env SB_CACHE=/tmp/sbpush/cache bash\n"
     )
     sent_deeper = False
     surveyed = False
@@ -548,11 +548,11 @@ async def test_push_two_hop_addresses_deeper(ssh_server, tmp_path: Path) -> None
     assert f"pid={deep_pid}".encode() in reply and deep_pid != top_pid, (reply, deep_pid, top_pid)
 
 
-# ───── multi-hop (sb inject conduit) ───────────────────────────────────────
+# ───── multi-hop (sb hop conduit) ───────────────────────────────────────
 #
-# A host has ONE mux/socket, and deeper hosts are reached via the `sb inject` CONDUIT —
+# A host has ONE mux/socket, and deeper hosts are reached via the `sb hop` CONDUIT —
 # a label-swap edge to a DIFFERENT host's socket. A real deeper host = a different
-# `/tmp` (e.g. `sb inject docker run …`); for a deterministic single-container proof we
+# `/tmp` (e.g. `sb hop docker run …`); for a deterministic single-container proof we
 # give the deeper mux only a fresh `$SB_CACHE` (so it bootstraps fresh over the conduit,
 # which is what the assertions prove). It needs no distinct `$TMPDIR` — each mux mints
 # its own token, so its socket name is unique on the shared `/tmp` by construction. Same
@@ -568,7 +568,7 @@ async def _drive_conduit(
     timeout: float = 120.0,
     initial: bytes = b"",
 ) -> list[bytes]:
-    """Inject hop 1, then `sb inject` a deeper mux (fresh `$SB_CACHE`; its socket name
+    """Bring hop 1 up, then `sb hop` a deeper mux (fresh `$SB_CACHE`; its socket name
     is unique by minting). The deeper host then bootstraps ENTIRELY over the conduit: its
     `sb` binary, manifest, and runtime fetches all backhaul up the host mux socket and
     arrive at the wrapper label-swap re-framed by the host mux (`R<id>:FILEREQ:…`, the
@@ -611,24 +611,24 @@ async def _drive_conduit(
         raise
     finally:
         with contextlib.suppress(Exception):
-            proc.stdin.write(b"\x03exit\nexit\n")  # interrupt sb inject, then exit both
+            proc.stdin.write(b"\x03exit\nexit\n")  # interrupt sb hop, then exit both
     return seen
 
 
 async def test_conduit_multi_hop_label_swap(ssh_server, tmp_path: Path) -> None:
-    """`sb inject` opens a deeper mux (fresh `$SB_CACHE`; its own minted socket) and
+    """`sb hop` opens a deeper mux (fresh `$SB_CACHE`; its own minted socket) and
     BACKHAULS its protocol over the host mux socket — the conduit. With a fresh deeper
     cache, the deeper host fetches its whole bootstrap (sb binary, manifest, runtime)
     through the chain: deeper side → conduit → host mux → wrapper, each reply routed
     back down. So the deeper runtime fetch arriving label-swap re-framed
     (`R<id>:FILEREQ:sb-bash.rc`) proves the conduit edge end to end — the multi-hop path
-    now a label-swap edge. (A real deeper host — `sb inject docker
+    now a label-swap edge. (A real deeper host — `sb hop docker
     run …` — is the same code; the fresh `$SB_CACHE` makes the fetches deterministic.)"""
     bucket = _make_bucket(tmp_path, {})
     server = BootstrapServer(bucket=bucket)
     deeper = (
         b"mkdir -p /tmp/sbdeep && "
-        b"sb inject env SB_CACHE=/tmp/sbdeep/cache bash\n"
+        b"sb hop env SB_CACHE=/tmp/sbdeep/cache bash\n"
     )
     async with _session(
         ssh_server, _session_script("bash"), clean_extra="/tmp/sbdeep"
@@ -1060,7 +1060,7 @@ async def test_tunnel_import_roundtrips(ssh_server, tmp_path: Path) -> None:
 
 
 async def test_tunnel_connect_two_hop(ssh_server, tmp_path: Path) -> None:
-    """A tunnel established on a DEEPER mux (reached via an `sb inject` conduit) reuses
+    """A tunnel established on a DEEPER mux (reached via an `sb hop` conduit) reuses
     ONE route id per hop: the deeper mux relays `R<dtid>:TUN…` up its conduit, the host
     mux label-swaps it to a single persistent id and reuses that id for every O/D/H/C
     frame (rather than minting a fresh id per frame). Running `sb tunnel connect` on the
@@ -1082,11 +1082,11 @@ async def test_tunnel_connect_two_hop(ssh_server, tmp_path: Path) -> None:
         apc = APCFilter()
         out = bytearray()
         tunnels = TunnelManager(lambda p: proc.stdin.write(apc_envelope(p)))
-        injected = False
+        hopped = False
         tunneled = False
 
         async def pump() -> None:
-            nonlocal injected, tunneled
+            nonlocal hopped, tunneled
             pending = initial
             while True:
                 if pending:
@@ -1107,11 +1107,11 @@ async def test_tunnel_connect_two_hop(ssh_server, tmp_path: Path) -> None:
                     resp = server.serve(ev)
                     if resp is not None:
                         proc.stdin.write(apc_envelope(resp) if parse_route(ev) else resp)
-                    if not injected and ev.startswith(b"FILEREQ:sb-bash.rc"):
-                        injected = True  # open the deeper mux via a conduit
+                    if not hopped and ev.startswith(b"FILEREQ:sb-bash.rc"):
+                        hopped = True  # open the deeper mux via a conduit
                         proc.stdin.write(
                             b"mkdir -p /tmp/sbtun && "
-                            b"sb inject env SB_CACHE=/tmp/sbtun/cache bash\n"
+                            b"sb hop env SB_CACHE=/tmp/sbtun/cache bash\n"
                         )
                     elif (
                         not tunneled

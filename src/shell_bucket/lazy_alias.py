@@ -1,7 +1,7 @@
 """Bootstrap + runtime (`sb-<family>.rc`) generation.
 
 The **bootstrap** is one POSIX script (token + shell baked in) the wrapper / `sb
-inject` **feed** over the pty into a target shell (the injector path). It detects
+hop` **feed** over the pty into the shell they bring up. It detects
 `uname -s`/`-m`, fetches just the `sb` binary, then `exec`s `sb mux`. `sb mux`
 (in V) does the rest:
 fetches the `sb-manifest` and the `sb-<family>.rc` runtime, populates a PATH dir
@@ -28,7 +28,7 @@ from collections.abc import Sequence
 # A lazy-alias name must be a valid shell function name.
 _VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 
-# Shell families with a known injection mechanism. Only `bash` has a runtime.
+# Shell families with a known setup mechanism. Only `bash` has a runtime.
 SHELL_FAMILIES = ("bash", "ksh", "zsh")
 
 # The per-host mux token is minted by `sb mux` itself (see `make_token` in
@@ -110,9 +110,9 @@ _INLINE_FETCH_FN = r"""__sb_fetch() {
 }"""
 
 
-# ───── the bootstrap (the single injected script) ─────────────────────────
+# ───── the bootstrap (the single fed script) ─────────────────────────
 
-# The one script the wrapper / `sb inject` feed over the pty into a target shell.
+# The one script the wrapper / `sb hop` feed over the pty into the shell they bring up.
 # Minimal by design: detect os/arch (per-hop), FILEREQ the `sb` binary (os/arch as
 # flags so the wrapper resolves the os_arch subtree), reconcile it, then `exec sb
 # mux`. Everything else — manifest, runtime, PATH dispatch symlinks — `sb mux`
@@ -143,10 +143,10 @@ exec "$SB_CACHE/sb" mux@@MUXARGS@@
 )
 
 
-# The injector's sync marker: the first thing the bootstrap emits, so the injector
+# The sync marker: the first thing the bootstrap emits, so whoever fed it
 # can swallow the pre-bootstrap noise (shell prompt, the echo of the fed line) up to
-# here and *then* start relaying. The bootstrap's stdout IS the injected pty (the
-# injector's master), so a plain emit reaches it. Token-free.
+# here and *then* start relaying. The bootstrap's stdout IS the fed pty (the
+# feeder's master), so a plain emit reaches it. Token-free.
 _BEGIN_EMIT = r"""printf '\033_shell-bucket:BEGIN\033\\' """.strip()
 
 
@@ -154,7 +154,7 @@ def build_bootstrap(shell: str, *, begin: bool = False, mux_args: str = "") -> s
     """Concretize BOOTSTRAP_TEMPLATE with the shell (the per-host token is minted by
     `sb mux`, not baked here).
 
-    With `begin=True` the bootstrap emits a `BEGIN` sync APC up front; the injector
+    With `begin=True` the bootstrap emits a `BEGIN` sync APC up front; whoever fed it
     watches the fed shell's output for it to know the bootstrap is live (everything
     before is swallowed). `begin=False` omits it (for callers that only want to
     inspect/compare the script body). `mux_args` is appended to the final `exec sb

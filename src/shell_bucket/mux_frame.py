@@ -8,7 +8,7 @@ token) is ``R<id>:<inner>``:
 
 ``<id>`` is the **local** request-id the sending mux assigned — each hop swaps in
 its own id and records `id → source`, so the response carrying that id routes back
-to the right downstream source (a local tool, or an `sb inject` conduit to a deeper
+to the right downstream source (a local tool, or an `sb hop` conduit to a deeper
 host). There is no shared hop counter, so fan-out is disambiguated at every level
 by each mux's own table.
 

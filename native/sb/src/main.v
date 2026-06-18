@@ -218,7 +218,7 @@ enum MState {
 
 // One label-swap routing entry. When a node relays a downstream request up,
 // it assigns its OWN `next_id` and records this entry; the response carrying that id
-// is routed back here. `fd` is the socket client (a local tool, or an `sb inject`
+// is routed back here. `fd` is the socket client (a local tool, or an `sb hop`
 // conduit to a deeper host) awaiting the reply. `inner_id` is the caller's own
 // request-id when the request arrived already `R<id>`-framed (a deeper host relaying
 // through its conduit) — the reply is re-framed `R<inner_id>:` back to it; or -1 when
@@ -491,7 +491,7 @@ fn emit_request(out_fd int, cmd string) {
 
 // Read a `~EOF`-terminated response from `fd`, returning (status, base64-body).
 // The socket variant of the FILEREQ response read (no tty echo handling) — used by
-// `sb inject` to fetch the bootstrap (`BOOT`) over the mux socket. Accumulates into
+// `sb hop` to fetch the bootstrap (`BOOT`) over the mux socket. Accumulates into
 // a []u8 (amortized O(1)), not a `string +=` (O(n²) on MB payloads).
 fn read_resp_b64(fd int) (int, string) {
 	mut b64 := []u8{}
@@ -2363,7 +2363,7 @@ fn run_mux_fetch(request string) {
 }
 
 // `sb __conduitfetch <inner-id> <request>` (self-test): connect + auth, then send an
-// `R<inner-id>:<request>` line — exactly what an `sb inject` conduit forwards when a
+// `R<inner-id>:<request>` line — exactly what an `sb hop` conduit forwards when a
 // deeper mux relays its child's R-tagged fetch. This exercises the host mux's
 // FRAMED-origin path: it must record inner-id, relay up under its OWN id, and on the
 // reply re-frame `R<inner-id>:<resp>` back as an APC (the form a conduit relays into
@@ -3808,7 +3808,7 @@ fn run_cryptotest() {
 
 // sb is a multi-call binary. main() routes by argv[0]/argv[1]:
 //   sb mux [--token=…] [--exec=…]      — the persistent per-host multiplexer
-//   sb fetch / run / token / inject    — protocol subcommands
+//   sb fetch / run / token / hop       — protocol subcommands
 //   <symlink>                          — busybox-style PATH dispatch (argv[0] ≠ sb)
 fn main() {
 	// The `__xxx` hooks and their exclusive helpers (the run_*test/probe/serve
@@ -4024,9 +4024,10 @@ fn main() {
 						die('usage: sb run <name> [args]')
 					}
 				}
-				'inject', 'i' {
-						// `sb inject <cmd...>` / `sb i <cmd...>` → inject that command.
-						run_inject(os.args[2..].clone())
+				'hop', 'h' {
+						// `sb hop <cmd...>` / `sb h <cmd...>` → carry the tooling
+						// across that command to the next hop.
+						run_hop(os.args[2..].clone())
 					}
 				'control', 'ctl' {
 					run_ctl(os.args[2..].clone())
@@ -4037,12 +4038,12 @@ fn main() {
 				'survey' {
 					run_survey()
 				}
-					else { die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|inject <cmd...>|ctl [status|down|up|reneg]|clip [--copy|--paste]|survey}') }
+					else { die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|hop <cmd...>|ctl [status|down|up|reneg]|clip [--copy|--paste]|survey}') }
 			}
 		}
-		// Bare `sb` has no action — `sb inject <cmd>` propagates the tooling to the
+		// Bare `sb` has no action — `sb hop <cmd>` carries the tooling to the
 		// next hop.
-		die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|inject <cmd...>|ctl [status|down|up|reneg]|clip [--copy|--paste]|survey}')
+		die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|hop <cmd...>|ctl [status|down|up|reneg]|clip [--copy|--paste]|survey}')
 	}
 	// Invoked via a PATH symlink (argv[0] ≠ sb): dispatch that tool.
 	run_tool(prog, os.args[1..].clone())
@@ -4543,7 +4544,7 @@ fn run_gatherprobe(stun_ip string, stun_port u16, wrap_ip string, wrap_port u16)
 // bridging three interfaces — the parent byte stream (down: route `R<id>` replies and
 // fan SURVEY / source-route PUSH; up: the child's terminal plus socket requests framed
 // as APCs), the child pty (terminal only — its our-prefix APCs are stripped at the
-// source), and the socket (authed local tools + inject conduits). The child tty carries
+// source), and the socket (authed local tools + hop conduits). The child tty carries
 // no protocol; escapes live only on the byte stream.
 @[noreturn]
 fn run_mux_pump(argv []string, token string) {
@@ -4606,7 +4607,7 @@ fn run_mux_pump(argv []string, token string) {
 
 	// Channel-separation handshake: mux_setup's pre-pump fetches are done and the
 	// pump (which demuxes APC frames from terminal bytes) is about to run — emit
-	// MUXUP up the byte stream so the relayer above us (a conduit `sb inject`, or
+	// MUXUP up the byte stream so the relayer above us (a conduit `sb hop`, or
 	// the wrapper) stops HOLDING terminal input and releases it now. Until MUXUP,
 	// input is preempted, so tty bytes never interlace our raw pre-pump exchange.
 	muxup := build_apc('MUXUP'.bytes())
@@ -4820,7 +4821,7 @@ fn run_mux_pump(argv []string, token string) {
 					continue
 				}
 				sline := line.bytestr()
-				// `CONDUIT`: this client (an `sb inject`) owns a downward byte stream —
+				// `CONDUIT`: this client (an `sb hop`) owns a downward byte stream —
 				// a tree edge. Tag it + assign a cid so SURVEY fans out to it and its
 				// SURVEYR replies get this cid prepended to their route.
 				if sline == 'CONDUIT' {
@@ -5135,7 +5136,7 @@ fn relay_finish(pid int, have_saved bool, mut saved [64]u8) {
 
 // A pure PTY byte-pump: forkpty `argv`, raw-relay stdin/master both directions,
 // mirror SIGWINCH + exit status. No protocol at all. `run_pump` (local shell /
-// `__pumptest`) and `sb inject`'s no-session fallback use it.
+// `__pumptest`) and `sb hop`'s no-session fallback use it.
 @[noreturn]
 fn plain_relay(argv []string) {
 	pid, master, sfd, mut saved, have_saved, mut ws := relay_setup(argv)
@@ -5193,7 +5194,7 @@ fn run_pump(shell string, rc string) {
 	plain_relay(shell_launch_words(shell, rc))
 }
 
-// The injector's sync. After feeding the bootstrap into the injected shell, read +
+// The hop sync. After feeding the bootstrap into the spawned shell, read +
 // DISCARD that shell's output (prompt, the echo of the fed line) until the
 // bootstrap's `BEGIN` APC, and RETURN any bytes that trailed it (the first real
 // session traffic) for the caller's relay to process. Byte-level marker match, so
@@ -5206,7 +5207,7 @@ fn swallow_until_begin(master int) []u8 {
 	for {
 		n := C.read(master, voidptr(&chunk[0]), usize(4096))
 		if n <= 0 {
-			die('sb inject: injected shell exited before bootstrap BEGIN')
+			die('sb hop: spawned shell exited before bootstrap BEGIN')
 		}
 		for i in 0 .. int(n) {
 			acc << chunk[i]
@@ -5249,7 +5250,7 @@ fn forward_up(mut up Scanner, sockfd int) bool {
 	return muxup
 }
 
-// `sb inject`'s conduit bridge: forkpty the transport, feed the bootstrap,
+// `sb hop`'s conduit bridge: forkpty the transport, feed the bootstrap,
 // sync on BEGIN, then relay — terminal both ways verbatim — while the deeper host's
 // protocol is BACKHAULED over the mux SOCKET (`sockfd`) instead of up our own tty.
 // So the host mux's child tty stays opaque: an `up` Scanner splits the deeper byte
@@ -5295,7 +5296,7 @@ fn conduit_relay(argv []string, feed []u8, sockfd int, token string) {
 	}
 	bufsz := usize(65536)
 	buf := unsafe { &u8(malloc(isize(bufsz))) }
-	// Safety net: if the injected command never becomes a mux (no MUXUP), release
+	// Safety net: if the hopped command never becomes a mux (no MUXUP), release
 	// held input after a generous grace so input can't hang forever — far longer
 	// than any real mux_setup, so it never preempts a legitimately-slow startup.
 	gate_deadline := monotonic_ms() + 20000
@@ -5370,18 +5371,18 @@ fn conduit_relay(argv []string, feed []u8, sockfd int, token string) {
 	relay_finish(pid, have_saved, mut saved)
 }
 
-// `sb inject <cmd> [args...]` (alias `sb i`): the injector. forkpty the given
-// command — the user's *usual* way to reach a shell (`ssh host`, `docker exec -it
-// c bash`, …). Inside a session (SB_TOKEN set + the host mux socket reachable) it
-// fetches the bootstrap over the socket, feeds it into the injected shell, and
+// `sb hop <cmd> [args...]` (alias `sb h`): carry the tooling to the next hop.
+// forkpty the given command — the user's *usual* way to reach a shell (`ssh host`,
+// `docker exec -it c bash`, …). Inside a session (SB_TOKEN set + the host mux socket
+// reachable) it fetches the bootstrap over the socket, feeds it into that shell, and
 // BACKHAULS the new hop's protocol over that same socket (the conduit) — so the
 // host mux's child tty stays opaque and the deeper host joins the routing tree as a
 // label-swap edge. With no session / no reachable mux it degrades to a faithful
 // pass-through wrapper around the command.
 @[noreturn]
-fn run_inject(cmd []string) {
+fn run_hop(cmd []string) {
 	if cmd.len == 0 {
-		die('usage: sb inject <command> [args...]')
+		die('usage: sb hop <command> [args...]')
 	}
 	token := os.getenv('SB_TOKEN')
 	if token == '' {

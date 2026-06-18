@@ -32,9 +32,13 @@ Command → shell-bucket, serial port to a Raspberry Pi → shell-bucket. Hops
 compose, so a single session can chain through all of the above at once, with the
 full toolbox available at every depth.
 
-The security model follows naturally from the transport: the tunnels and tooling
-evaporate when the tty closes, just like SSH port-forwarding — because it *is*
-the tty, generalized.
+Crucially, this grants you no new *reach*. Everything shell-bucket does, you
+could already do by hand in a shell you're authorized to use — paste a
+base64-encoded file in, `curl` a static binary down, hand-roll an SSH
+port-forward. shell-bucket just makes those things ergonomic and rides the one
+channel you already have. The tooling and tunnels evaporate when the tty closes,
+just like SSH port-forwarding — because it *is* the tty, generalized. (See
+[Scope & security](#scope--security).)
 
 **Practical example:** need `jmap` on an ECS instance without baking it into the
 Docker image? Put the static binary in your bucket. The next time you
@@ -76,7 +80,7 @@ pid` — one row per `sb mux` in the tree. (This is the in-session readout of th
 graph the wrapper maintains; richer dashboard tooling can build on the same
 wrapper-side topology.)
 
-The `sb inject <cmd>` / `sb i <cmd>` subcommand propagates the tooling to the
+The `sb hop <cmd>` / `sb h <cmd>` subcommand carries the tooling to the
 next hop without a full `sb mux` — useful for nested `ssh` calls that the tooled
 shell doesn't launch itself.
 
@@ -86,8 +90,8 @@ shell doesn't launch itself.
 shell-bucket wrap [--tmux SESSION] [--shell SHELL] -- COMMAND [ARGS...]
 ```
 
-Runs `COMMAND` under a local pseudo-terminal and brings full shell-bucket
-injection up over it. `COMMAND` is any tty tool that lands you in a shell:
+Runs `COMMAND` under a local pseudo-terminal and brings your full shell-bucket
+tooling up in the session. `COMMAND` is any tty tool that lands you in a shell:
 
 ```
 shell-bucket wrap -- ssh user@host
@@ -101,7 +105,7 @@ Authentication and host-key handling belong to the wrapped tool, not the wrapper
 — shell-bucket assumes the command lands you in a shell with no interactive
 preamble (no `password:` prompt). Options:
 
-- `--tmux SESSION` — attach/create a tmux session after injection (requires tmux
+- `--tmux SESSION` — attach/create a tmux session after setup (requires tmux
   3.3+ on the remote for APC passthrough). `sb mux` forkpty's the fetchable
   `sb-tmux.sh` launcher, which resolves a tmux binary (system or bucket-fetched),
   writes the pane config with `@sb-token` for reconnect, and execs `tmux new -A`.
@@ -260,12 +264,29 @@ Compression (raw DEFLATE with a persistent cross-session dictionary) sits betwee
 the frame layer and the ARQ — above the ARQ rather than below — because the ARQ
 guarantees ordering, making the dictionary valid for the entire session.
 
-## Authentication & host-key verification
+## Scope & security
 
-These belong to the wrapped tool, not to shell-bucket. `ssh` consults your
-`~/.ssh/config`, agent, keys, and `known_hosts`; `aws ecs execute-command` uses
-your AWS credentials; and so on. The wrapper just runs the command you give it
-and rides the resulting tty — it holds no keys and verifies no hosts.
+shell-bucket is an **ergonomics** layer over a shell you are already authorized
+to use. It does not open new access, escalate anything, or bypass a control — it
+only makes the things you could already do less tedious, over the one tty you
+already have:
+
+- **File delivery** is just a faster version of pasting base64 into the terminal
+  or `curl`-ing a static binary onto the host — only the bytes you actually
+  invoke cross the wire, and only into `~/.cache/shell-bucket`.
+- **Clipboard** (`sb clip`) does what the terminal emulator's own copy/paste
+  already does, without the mouse.
+- **Tunnels** (`sb tunnel`) forward TCP over the existing tty, the way SSH
+  port-forwarding does. In fact the security posture is *tighter* than the usual
+  ad-hoc alternatives: unlike `ngrok`, no listening port is ever exposed to the
+  internet, and unlike a stray `ngrok`/background forward, every tunnel
+  evaporates the instant the tty closes — nothing survives the session.
+
+Authentication and host-key verification belong to the wrapped tool, not to
+shell-bucket. `ssh` consults your `~/.ssh/config`, agent, keys, and
+`known_hosts`; `aws ecs execute-command` uses your AWS credentials; and so on.
+The wrapper just runs the command you give it and rides the resulting tty — it
+holds no keys and verifies no hosts.
 
 ## Installation
 

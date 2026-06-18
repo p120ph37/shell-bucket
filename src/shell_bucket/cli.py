@@ -27,7 +27,8 @@ def cli() -> None:
 @cli.command(
     context_settings={"ignore_unknown_options": True},
     help=(
-        "Wrap any tty tool with our injection (RC + lazy helpers + sb propagation).\n\n"
+        "Wrap any tty tool to bring your tooling into the session "
+        "(RC + lazy helpers + sb propagation).\n\n"
         "The tool is whatever gives you a shell over a terminal — ssh, "
         "aws ecs execute-command, docker exec -it, bash, screen, … — given after `--`:\n\n"
         "\b\n"
@@ -43,7 +44,7 @@ def cli() -> None:
     "--tmux",
     "tmux_session",
     metavar="SESSION",
-    help="Launch the remote in `tmux new -A -s SESSION` after RC injection. "
+    help="Launch the remote in `tmux new -A -s SESSION` after RC setup. "
     "Requires tmux 3.3+ on the remote for APC passthrough.",
 )
 @click.option(

@@ -102,7 +102,7 @@ upstream, so the wrapper always sees depth from its perspective.
 **MUXUP gate:**
 
 After `mux_setup`, `sb mux` emits `MUXUP` in-band before entering the pump loop.
-The wrapper and `sb inject`/conduit relays hold all terminal input until they see
+The wrapper and `sb hop`/conduit relays hold all terminal input until they see
 `MUXUP` (or a 20 s grace deadline), preventing APC/terminal interleaving during
 the pre-pump bootstrap fetch.
 
@@ -154,7 +154,7 @@ bearer-token comparison. The socket carries:
   aliases, `sb run <name>`)
 - `TUN:dial/bind` commands from `sb tunnel`
 - `TOKEN:` rebind commands from `sb token`
-- `SURVEY` / `PUSH` fan-out relayed from child `sb inject` sessions
+- `SURVEY` / `PUSH` fan-out relayed from child `sb hop` sessions
 
 `sb token --token=<tok>` rebinds the socket to a new locator/secret (used for
 reconnect). `sb token --randomize` mints a fresh random token, prints it, and
@@ -298,7 +298,7 @@ container against the freshly-built `linux_arm64` binary. Tests in `test/*.sh`:
 | `dispatch.sh` | `sb fetch` / `sb run` / PATH symlink dispatch |
 | `bin.sh` | `sb mux` dispatch-dir population from a manifest |
 | `prune.sh` | cache reconciliation at manifest-load |
-| `inject.sh` | `sb inject` forkpty relay |
+| `hop.sh` | `sb hop` forkpty relay |
 | `muxsock.sh` | side-band socket: bearer-auth, echo roundtrip, sysexits failure codes |
 | `token.sh` | `sb token` socket rebind |
 | `crypto.sh` | AES-256-GCM AEAD: NIST KAT + round-trip/tamper/AAD-mismatch |
@@ -335,7 +335,7 @@ User-facing (invoked by name or via PATH symlink):
 | `sb run <name> [args]` | ensure-cached then exec the named helper |
 | `sb token [--token=T \| --randomize]` | manage the side-band socket token |
 | `sb tunnel connect\|listen\|import\|export …` | open an in-band TCP tunnel |
-| `sb inject <cmd...>` / `sb i <cmd...>` | propagate tooling to the next hop |
+| `sb hop <cmd...>` / `sb h <cmd...>` | carry tooling to the next hop |
 | `sb ctl [status]` | show mux session stats: byte counts, backhaul state, relay links |
 | `sb ctl down` | force a lossless UDP backhaul revert to in-band |
 | `sb ctl up [ip:port,…]` | ask the wrapper to (re)negotiate the UDP backhaul; optional manual mux candidates |

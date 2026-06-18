@@ -46,7 +46,7 @@ def test_serve_legacy_verbs_are_gone(tmp_path: Path) -> None:
 
 
 def test_serve_boot_returns_begin_bootstrap(tmp_path: Path) -> None:
-    # The injector's `BOOT:<shell>` → the bootstrap to feed, with the BEGIN sync.
+    # `sb hop`'s `BOOT:<shell>` → the bootstrap to feed, with the BEGIN sync.
     out = _server(tmp_path).serve(b"BOOT:/usr/bin/bash")
     assert out == encode_for_delivery(
         build_bootstrap("/usr/bin/bash", begin=True).encode("utf-8")
@@ -313,7 +313,7 @@ async def test_up_reneg_forces_offer_past_one_shot_guard() -> None:
     assert tm._reneg_used is True
     assert len(_offers(writes)) == 2
 
-    # Now inject UP:RENEG (as dispatch_frame would) — must bypass the guard.
+    # Now feed UP:RENEG (as dispatch_frame would) — must bypass the guard.
     tm._reneg_used = False   # simulates what dispatch_frame does on UP:RENEG
     tm._spawn_offer()
     await asyncio.gather(*list(tm._tasks))

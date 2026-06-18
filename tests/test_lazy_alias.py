@@ -99,13 +99,13 @@ def test_bootstrap_parses() -> None:
 
 
 def test_bootstrap_begin_emits_sync_apc() -> None:
-    # Injector path: a token-free BEGIN sync APC up front. Embed path (begin=False)
-    # omits it.
+    # Fed-bootstrap path: a token-free BEGIN sync APC up front. Embed path
+    # (begin=False) omits it.
     plain = build_bootstrap("bash")
     assert "BEGIN" not in plain
     with_begin = build_bootstrap("bash", begin=True)
     assert r"shell-bucket:BEGIN" in with_begin  # token-free marker
-    # BEGIN comes before the shell/arch detection (so the injector syncs early).
+    # BEGIN comes before the shell/arch detection (so the feeder syncs early).
     assert with_begin.index("BEGIN") < with_begin.index("uname -s")
 
 

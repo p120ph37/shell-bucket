@@ -157,8 +157,8 @@ class BootstrapServer:
 
     The wrapper holds no token — the wire is token-free (trust is
     structural; see `apc_filter`) and each `sb mux` mints its own per-host socket
-    token. The only non-file request is `BOOT` (the bootstrap `sb inject` feeds
-    into the command it injects, baked with the shell); everything else is a
+    token. The only non-file request is `BOOT` (the bootstrap `sb hop` feeds
+    into the shell it brings up on the next hop, baked with the shell); everything else is a
     `FILEREQ` resolved as a path in the one bucket tree — `sb` and the
     `sb-<family>.rc` runtimes are just files there (regenerated at connect; see
     `regenerate_runtimes`).
@@ -211,9 +211,9 @@ class BootstrapServer:
     def _serve_inner(self, command: bytes) -> bytes | None:
         """Route one unframed command to its response (or None to drop it)."""
         if command.startswith(b"BOOT:"):
-            # The injector (`sb inject`) asks for the bootstrap to feed into the
-            # command it drives — baked with the given shell, emitting a BEGIN sync
-            # APC so the injector knows it's live (the deeper mux mints its own token).
+            # `sb hop` asks for the bootstrap to feed into the shell it drives on
+            # the next hop — baked with the given shell, emitting a BEGIN sync APC
+            # so `sb hop` knows it's live (the deeper mux mints its own token).
             shell = command[len(b"BOOT:") :].decode("utf-8", "replace")
             return encode_for_delivery(
                 build_bootstrap(shell, begin=True).encode("utf-8")
@@ -640,8 +640,8 @@ async def _bridge_stdio(
 ) -> None:
     """Bidirectional raw-byte bridge between local tty and remote process.
 
-    `initial` is any remote output already read past the injector's BEGIN sync
-    (see `_feed_bootstrap`); it is processed through the APC filter before the
+    `initial` is any remote output already read past the BEGIN sync
+    (see `_feed_and_sync`); it is processed through the APC filter before the
     read loop so a FILEREQ that trailed BEGIN in the same read isn't lost.
     """
     loop = asyncio.get_running_loop()
@@ -822,15 +822,15 @@ async def _feed_and_sync(
     *,
     timeout: float = 30.0,
 ) -> bytes:
-    """Inject hop 1: feed `script` (a begin-emitting bootstrap or tmux prologue)
-    into the remote shell over its stdin, then swallow that shell's output (its
-    prompt, motd, the echo of the fed line) up to the BEGIN sync APC. Returns the
+    """Bring hop 1 up: feed `script` (a begin-emitting bootstrap or tmux prologue)
+    into the shell over its stdin, then swallow that shell's output (its prompt,
+    motd, the echo of the fed line) up to the BEGIN sync APC. Returns the
     post-BEGIN remainder (the first bytes of real session traffic) to prime the
     bridge.
 
     The script rides as one `eval "$(… base64 -d)"` line: POSIX, no heredoc or
     continuation prompt, and nothing the transport must escape — the same shape
-    `sb inject` feeds for deeper hops. BEGIN is matched at the byte level (real
+    `sb hop` feeds for deeper hops. BEGIN is matched at the byte level (real
     ESC), so the echoed *source* of the fed line can't false-trigger it.
     """
     b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
@@ -868,9 +868,9 @@ async def run_session(
     terminal at the far end — `transport.CommandTransport(["ssh", "user@host"])`,
     or the same for `aws ecs execute-command …`, `bash`, `screen`, etc. The
     wrapper is transport-blind: it opens the process, then brings `shell` up
-    under the multiplexer by **injecting** hop 1 — feeding the session script
+    under the multiplexer by setting up hop 1 — feeding the session script
     over the tty (transport-agnostic, POSIX — no `<(…)`/argv escaping), exactly
-    as `sb inject` does for deeper hops. The script is the plain bootstrap, or —
+    as `sb hop` does for deeper hops. The script is the plain bootstrap, or —
     for `--tmux` — the tmux-resolving prologue. It fetches the sb binary and
     `exec`s the multiplexer (or tmux), whose in-band requests a `BootstrapServer`
     answers from the `bucket`. If `bucket` is None, a plain shell runs.
