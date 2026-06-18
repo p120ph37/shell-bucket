@@ -82,6 +82,8 @@ fn C.shutdown(fd int, how int) int
 fn C.sendto(fd int, buf voidptr, n usize, flags int, addr voidptr, addrlen u32) i64
 fn C.recvfrom(fd int, buf voidptr, n usize, flags int, addr voidptr, addrlen voidptr) i64
 fn C.getsockname(fd int, addr voidptr, addrlen voidptr) int
+fn C.getsockopt(fd int, level int, optname int, optval voidptr, optlen voidptr) int
+fn C.kill(pid int, sig int) int
 
 @[noreturn]
 fn C._exit(code int)
@@ -108,6 +110,8 @@ const sock_cloexec = 0o2000000 // SOCK_CLOEXEC (== O_CLOEXEC on Linux)
 const somaxconn = 128
 const sol_socket = 1
 const so_reuseaddr = 2
+const so_peercred = 17 // getsockopt(SOL_SOCKET, SO_PEERCRED) -> struct ucred (Linux)
+const sigterm = 15 // `sb ctl kill` sends SIGTERM (graceful) to session components
 const shut_wr = 1 // shutdown(fd, SHUT_WR) -- half-close the write side
 const sock_mode = u32(0o600)
 // sysexits.h codes the mux socket clients return so cron-style consumers can
@@ -151,6 +155,18 @@ mut:
 	sin_zero   [8]u8
 }
 
+// struct ucred { pid_t pid; uid_t uid; gid_t gid; } -- 12 bytes, what
+// getsockopt(SO_PEERCRED) fills in. We only read `pid`: the kernel attests the
+// connecting process, so a socket client can never lie about its PID -- that is
+// what makes `sb ctl kill` a SAFE kill (only real session components, never an
+// arbitrary PID a client names).
+struct Ucred {
+mut:
+	pid u32
+	uid u32
+	gid u32
+}
+
 // One connected mux-socket client in the mux poll loop: its fd, whether it has
 // passed bearer-auth yet, and a line-assembly buffer (the loop is non-blocking, so
 // a request may arrive in pieces).
@@ -161,9 +177,22 @@ mut:
 	conduit          bool // declared `CONDUIT` -> owns a downward byte stream (a tree edge)
 	cid              int  // this mux's id for the conduit (the route element addressing it)
 	tunnel_id        int = -1 // a tunnel client (`sb tunnel`) relays its lines under this id
+	pid              int    // kernel-attested peer PID (SO_PEERCRED); 0 if unknown
+	desc             string // component description for `sb ctl -v` (cmdline / port spec / RPC name)
 	inbuf            []u8
 	clip_set_waiting bool // CLIP:SET received; next bytes are 4-byte-length + raw payload
 	clip_set_len     int = -1 // -1 = awaiting 4-byte length; >=0 = payload bytes remaining
+}
+
+// Read the kernel-attested peer PID of a connected AF_UNIX socket. 0 if the
+// lookup fails (the caller then treats the component as un-killable, never PID 0).
+fn peer_pid(fd int) int {
+	mut cred := Ucred{}
+	mut l := u32(sizeof(Ucred))
+	if C.getsockopt(fd, sol_socket, so_peercred, voidptr(&cred), voidptr(&l)) != 0 {
+		return 0
+	}
+	return int(cred.pid)
 }
 
 @[noreturn]
@@ -231,8 +260,81 @@ struct Route {
 mut:
 	fd         int
 	inner_id   int
-	persistent bool // a tunnel route: bidirectional + not deleted on reply
-	clip       bool // CLIP:GET / CLIP:SET: b64<->raw translation at socket boundary
+	persistent bool   // a tunnel route: bidirectional + not deleted on reply
+	clip       bool   // CLIP:GET / CLIP:SET: b64<->raw translation at socket boundary
+	pid        int    // originating local client's kernel-attested PID (for `sb ctl` rpc inventory)
+	desc       string // RPC name (verb before the first ':'); never the args, which may hold secrets
+}
+
+// One mux-session component for `sb ctl -v` / `sb ctl kill`: a relay (an `sb inject`
+// conduit), a port (an `sb tunnel` client), or an rpc (a one-shot local route). `pid`
+// is the kernel-attested peer PID -- the ONLY PIDs `sb ctl kill` will ever signal, so a
+// client cannot ask the mux to kill an arbitrary process.
+struct Comp {
+	pid  int
+	cat  string // 'relay' | 'port' | 'rpc'
+	desc string
+}
+
+// inventory enumerates this mux's DIRECT local components (not deep ones carried over a
+// relay -- those are killed by killing the relay, or by `sb ctl` after hopping down).
+// relays/ports are socket clients; rpcs are non-persistent routes that a LOCAL client
+// (inner_id == -1) originated.
+fn inventory(clients []MuxClient, routes map[int]Route) []Comp {
+	mut out := []Comp{}
+	for cl in clients {
+		if cl.conduit {
+			out << Comp{
+				pid:  cl.pid
+				cat:  'relay'
+				desc: cl.desc
+			}
+		} else if cl.tunnel_id >= 0 {
+			out << Comp{
+				pid:  cl.pid
+				cat:  'port'
+				desc: cl.desc
+			}
+		}
+	}
+	for _, rt in routes {
+		if !rt.persistent && rt.inner_id == -1 {
+			out << Comp{
+				pid:  rt.pid
+				cat:  'rpc'
+				desc: rt.desc
+			}
+		}
+	}
+	return out
+}
+
+// select_kills resolves a kill `selector` (all|relays|ports|rpcs|<pid>) against the live
+// inventory and returns the PIDs to signal. A non-empty `matchf` further requires the
+// component's desc to contain it (a `--match=` filter, and a PID-reuse safeguard for a
+// numeric selector). A numeric selector ONLY ever returns a PID that is actually in
+// `comps` -- the safety gate that keeps `sb ctl kill` from signalling unlisted processes.
+fn select_kills(comps []Comp, selector string, matchf string) []int {
+	mut out := []int{}
+	for c in comps {
+		if c.pid <= 0 {
+			continue
+		}
+		if matchf != '' && !c.desc.contains(matchf) {
+			continue
+		}
+		hit := match selector {
+			'all' { true }
+			'relays' { c.cat == 'relay' }
+			'ports' { c.cat == 'port' }
+			'rpcs' { c.cat == 'rpc' }
+			else { selector.int() > 0 && c.pid == selector.int() }
+		}
+		if hit && out.index(c.pid) < 0 {
+			out << c.pid
+		}
+	}
+	return out
 }
 
 // `R<id>:<rest>` -> (true, id, rest); (false, ...) if not a request-id frame.
@@ -1304,6 +1406,17 @@ fn run_mux_serve() {
 				write_str(cfd, 'OK\n')
 				continue
 			}
+			// COMPS: canned inventory -- one of each category (exercises the `-v` /
+			// `kill` table wire without a live pump). PID 0 -> never actually signalled.
+			if line == 'COMPS' {
+				write_str(cfd, 'comp\t0\trelay\tssh bastion\ncomp\t0\tport\tbind:127.0.0.1:8080:all\ncomp\t0\trpc\tFILEREQ\n~END\n')
+				continue
+			}
+			// KILL: echo back a canned killed-row table (PID 0 -> no real signal sent).
+			if line.starts_with('KILL:') {
+				write_str(cfd, 'killed\t0\trpc\tFILEREQ\n~END\n')
+				continue
+			}
 			// CLIP:GET: return "hello" using the binary socket protocol (OK\n + len + raw).
 			if line == 'CLIP:GET' {
 				payload := 'hello'.bytes()
@@ -1349,14 +1462,61 @@ fn run_mux_serve() {
 	}
 }
 
-// `sb ctl [status|down|up [ip:port,...]|reneg [ip:port,...]]` -- query or control the
-// running mux. With no args (or `status`): print formatted session stats. `down`
-// forces a lossless backhaul revert. `up` / `reneg` asks the wrapper to renegotiate;
-// optional `ip:port,...` override what candidates the mux advertises in its UP:A answer
-// (useful when STUN cannot discover a public address for this host). `sb control` is
-// a canonical alias; shell completion can use either.
+// Collect a `~END`-terminated tab-separated table from the mux socket (the reply to
+// COMPS or KILL): each line is `<tag>\t<pid>\t<cat>\t<desc>`. Returns the rows as
+// [pid, cat, desc] triples (the tag is dropped). Used by `sb ctl -v` and `kill`.
+fn ctl_read_table(fd int) [][]string {
+	mut rows := [][]string{}
+	for {
+		line, lok := read_line(fd)
+		if !lok || line == '~END' {
+			break
+		}
+		f := line.split('\t')
+		if f.len >= 4 {
+			rows << [f[1], f[2], f[3]]
+		}
+	}
+	return rows
+}
+
+// Pretty-print a component table (the rows from ctl_read_table) under `title`.
+fn print_comp_table(title string, rows [][]string) {
+	println(title)
+	if rows.len == 0 {
+		println('  (none)')
+		return
+	}
+	for r in rows {
+		println('  ${r[0]:7}  ${r[1]:-5}  ${r[2]}') // pid, cat, desc
+	}
+}
+
+// `sb ctl [-v] [status|udpup [ip:port,...]|udpdn|kill <sel> [--match=X]]` -- query or
+// control the running mux. No args (or `status`): formatted session stats; add `-v`
+// to also list each relay/port/rpc (pid * category * description). `udpup` asks the
+// wrapper to (re)negotiate the UDP backhaul (optional `ip:port,...` overrides the mux's
+// advertised candidates when STUN can't find a public address); `udpdn`/`udpdown`
+// forces a lossless revert to in-band. `kill <sel>` SAFELY stops session components:
+// `<sel>` is all|relays|ports|rpcs|<pid>, `--match=X` filters to descriptions
+// containing X (and double-guards a numeric pid against PID reuse). Bare `kill` prints
+// usage + the `-v` listing. Only kernel-attested session components are ever signalled.
+// `sb control` is a canonical alias.
 @[noreturn]
 fn run_ctl(args []string) {
+	// Split switches (`-v`, `--match=...`) from positional args so they may appear anywhere.
+	mut pos := []string{}
+	mut verbose := false
+	mut matchf := ''
+	for a in args {
+		if a == '-v' || a == '--verbose' {
+			verbose = true
+		} else if a.starts_with('--match=') {
+			matchf = a['--match='.len..]
+		} else {
+			pos << a
+		}
+	}
 	token := os.getenv('SB_TOKEN')
 	if token == '' {
 		die('SB_TOKEN not set')
@@ -1372,7 +1532,7 @@ fn run_ctl(args []string) {
 		C.close(fd)
 		C._exit(ex_noperm)
 	}
-	verb := if args.len > 0 { args[0] } else { 'status' }
+	verb := if pos.len > 0 { pos[0] } else { 'status' }
 	match verb {
 		'status', '' {
 			write_str(fd, 'STATUS\n')
@@ -1390,7 +1550,7 @@ fn run_ctl(args []string) {
 				kv[k] = v
 				order << k
 			}
-			C.close(fd)
+			// NB: socket stays open -- `-v` issues a second COMPS request below.
 			// Pretty-print -- extract into locals to avoid escaped-quote issues.
 			uptime_ms := kv['uptime_ms'].i64()
 			h := uptime_ms / 3600000
@@ -1442,9 +1602,19 @@ fn run_ctl(args []string) {
 			nrelays := kv['relays'].int()
 			nrpcs := kv['rpcs'].int()
 			println('Clients: ${nclients} (${nrelays} relays, ${nports} ports, ${nrpcs} RPCs)')
+			if verbose {
+				// Second round-trip on the SAME socket: enumerate the components.
+				write_str(fd, 'COMPS\n')
+				rows := ctl_read_table(fd)
+				C.close(fd)
+				println('')
+				print_comp_table('Components (pid * cat * desc)', rows)
+			} else {
+				C.close(fd)
+			}
 			exit(0)
 		}
-		'down' {
+		'udpdn', 'udpdown' {
 			write_str(fd, 'BH:DOWN\n')
 			resp, rok := read_line(fd)
 			C.close(fd)
@@ -1455,8 +1625,8 @@ fn run_ctl(args []string) {
 			println(resp)
 			exit(0)
 		}
-		'up', 'reneg' {
-			cand_arg := if args.len > 1 { ':${args[1..].join(',')}' } else { '' }
+		'udpup' {
+			cand_arg := if pos.len > 1 { ':${pos[1..].join(',')}' } else { '' }
 			write_str(fd, 'BH:UP${cand_arg}\n')
 			resp, rok := read_line(fd)
 			C.close(fd)
@@ -1464,12 +1634,36 @@ fn run_ctl(args []string) {
 				eprintln('sb ctl: ${resp}')
 				C._exit(1)
 			}
-			println('renegotiation requested')
+			println('udp backhaul renegotiation requested')
+			exit(0)
+		}
+		'kill' {
+			// Bare `kill` (no selector): print usage + the `-v` component listing so the
+			// user can see what's killable, then exit non-zero (nothing was killed).
+			if pos.len < 2 {
+				write_str(fd, 'COMPS\n')
+				rows := ctl_read_table(fd)
+				C.close(fd)
+				eprintln('usage: sb ctl kill {all|relays|ports|rpcs|<pid>} [--match=<substr>]')
+				eprintln('')
+				print_comp_table('Killable components (pid * cat * desc):', rows)
+				C._exit(2)
+			}
+			selector := pos[1]
+			req := if matchf != '' { 'KILL:${selector}:${matchf}\n' } else { 'KILL:${selector}\n' }
+			write_str(fd, req)
+			rows := ctl_read_table(fd)
+			C.close(fd)
+			if rows.len == 0 {
+				eprintln('sb ctl: no matching session components')
+				C._exit(1)
+			}
+			print_comp_table('Killed (pid * cat * desc):', rows)
 			exit(0)
 		}
 		else {
 			C.close(fd)
-			die('usage: sb ctl [status | down | up [ip:port,...] | reneg [ip:port,...]]')
+			die('usage: sb ctl [-v] [status | udpup [ip:port,...] | udpdn | kill {all|relays|ports|rpcs|<pid>} [--match=X]]')
 		}
 	}
 	C._exit(0) // unreachable; satisfies @[noreturn] checker
@@ -4013,6 +4207,42 @@ fn main() {
 			run_sigtest()
 			exit(0)
 		}
+		// `sb __killtest <selector> [match]` -- exercise select_kills against a fixed
+		// synthetic inventory (no socket/pty). Prints the chosen PIDs space-joined, or
+		// `none`. Proves the selector/category/match/PID-reuse-guard logic.
+		if os.args.len >= 3 && os.args[1] == '__killtest' {
+			comps := [
+				Comp{
+					pid:  101
+					cat:  'relay'
+					desc: 'ssh bastion'
+				},
+				Comp{
+					pid:  102
+					cat:  'port'
+					desc: 'bind:127.0.0.1:8080:all'
+				},
+				Comp{
+					pid:  103
+					cat:  'port'
+					desc: 'dial:db:5432'
+				},
+				Comp{
+					pid:  104
+					cat:  'rpc'
+					desc: 'FILEREQ'
+				},
+				Comp{
+					pid:  0
+					cat:  'rpc'
+					desc: 'unknownpid'
+				},
+			]
+			matchf := if os.args.len >= 4 { os.args[3] } else { '' }
+			pids := select_kills(comps, os.args[2], matchf)
+			println(if pids.len == 0 { 'none' } else { pids.map(it.str()).join(' ') })
+			exit(0)
+		}
 		if os.args.len >= 7 && os.args[1] == '__arqsend' {
 			run_arqsend(os.args[2], u16(os.args[3].int()), u16(os.args[4].int()), os.args[5].int(),
 				os.args[6].int())
@@ -4117,13 +4347,13 @@ fn main() {
 					run_survey()
 				}
 				else {
-					die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|inject <cmd...>|ctl [status|down|up|reneg]|clip [--copy|--paste]|survey}')
+					die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|inject <cmd...>|ctl [-v|status|udpup|udpdn|kill]|clip [--copy|--paste]|survey}')
 				}
 			}
 		}
 		// Bare `sb` has no action -- `sb inject <cmd>` propagates the tooling to the
 		// next hop.
-		die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|inject <cmd...>|ctl [status|down|up|reneg]|clip [--copy|--paste]|survey}')
+		die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|inject <cmd...>|ctl [-v|status|udpup|udpdn|kill]|clip [--copy|--paste]|survey}')
 	}
 	// Invoked via a PATH symlink (argv[0] != sb): dispatch that tool.
 	run_tool(prog, os.args[1..].clone())
@@ -4917,13 +5147,15 @@ fn run_mux_pump(argv []string, token string) {
 					continue
 				}
 				sline := line.bytestr()
-				// `CONDUIT`: this client (an `sb inject`) owns a downward byte stream --
-				// a tree edge. Tag it + assign a cid so SURVEY fans out to it and its
-				// SURVEYR replies get this cid prepended to their route.
-				if sline == 'CONDUIT' {
+				// `CONDUIT[:<cmdline>]`: this client (an `sb inject`) owns a downward byte
+				// stream -- a tree edge. Tag it + assign a cid so SURVEY fans out to it and
+				// its SURVEYR replies get this cid prepended to their route. The optional
+				// cmdline is the sub-process it drives, shown by `sb ctl -v`.
+				if sline == 'CONDUIT' || sline.starts_with('CONDUIT:') {
 					c.conduit = true
 					c.cid = next_cid
 					next_cid++
+					c.desc = if sline.len > 8 { sline[8..] } else { '' }
 					continue
 				}
 				// A SURVEYR coming UP from a conduit child: prepend this conduit's cid
@@ -4984,6 +5216,39 @@ fn run_mux_pump(argv []string, token string) {
 						}
 					}
 					write_str(c.fd, 'depth:${depth}\nuptime_ms:${uptime}\nmain_rx_bytes:${stat_main_rx}\nmain_tx_bytes:${stat_main_tx}\npty_rx_bytes:${stat_pty_rx}\npty_tx_bytes:${stat_pty_tx}\nbh_state:${bh_state}\n${bh_info}clients:${clients.len}\nports:${ntunnels}\nrelays:${nconduits}\nrpcs:${nrpcs}\n~END\n')
+					continue
+				}
+				// `COMPS` -- `sb ctl -v` inventory: one `comp\t<pid>\t<cat>\t<desc>` line
+				// per DIRECT local component (relay/port/rpc), `~END`-terminated. desc is
+				// tab/newline-free by construction, so the wire stays line/field-safe.
+				if sline == 'COMPS' {
+					mut out := ''
+					for cp in inventory(clients, routes) {
+						out += 'comp\t${cp.pid}\t${cp.cat}\t${cp.desc}\n'
+					}
+					write_str(c.fd, '${out}~END\n')
+					continue
+				}
+				// `KILL:<selector>[:<match>]` -- `sb ctl kill`. selector in {all, relays,
+				// ports, rpcs, <pid>}; optional `<match>` requires the component's desc to
+				// contain it (the `--match=` filter / PID-reuse safeguard). The mux resolves
+				// against its OWN inventory and signals ONLY those PIDs -- a client can never
+				// name an arbitrary process (PIDs are kernel-attested via SO_PEERCRED).
+				// Replies `killed\t<pid>\t<cat>\t<desc>` per signalled component + `~END`.
+				if sline.starts_with('KILL:') {
+					parts := sline.split_nth(':', 3) // KILL, selector, match
+					selector := if parts.len >= 2 { parts[1] } else { '' }
+					matchf := if parts.len >= 3 { parts[2] } else { '' }
+					comps := inventory(clients, routes)
+					pids := select_kills(comps, selector, matchf)
+					mut out := ''
+					for cp in comps {
+						if pids.index(cp.pid) >= 0 && (matchf == '' || cp.desc.contains(matchf)) {
+							C.kill(cp.pid, sigterm)
+							out += 'killed\t${cp.pid}\t${cp.cat}\t${cp.desc}\n'
+						}
+					}
+					write_str(c.fd, '${out}~END\n')
 					continue
 				}
 				// `BH:DOWN` -- force the backhaul into a lossless revert (no-op if not up).
@@ -5071,6 +5336,7 @@ fn run_mux_pump(argv []string, token string) {
 						persistent: true
 					}
 					c.tunnel_id = tid
+					c.desc = sline['TUN:'.len..] // e.g. `dial:host:22` / `bind:127.0.0.1:8080:all`
 					send_up('R${tid}:${sline}'.bytes(), mut bh, monotonic_ms())
 					continue
 				}
@@ -5110,9 +5376,12 @@ fn run_mux_pump(argv []string, token string) {
 				} else {
 					id := next_id
 					next_id++
+					// RPC desc = the verb only (up to the first ':'); args may hold secrets.
 					routes[id] = Route{
 						fd:       c.fd
 						inner_id: -1
+						pid:      c.pid
+						desc:     sline[..(sline.index(':') or { sline.len })]
 					}
 					mut cmd := 'R${id}:'.bytes()
 					cmd << line
@@ -5133,6 +5402,7 @@ fn run_mux_pump(argv []string, token string) {
 				clients << MuxClient{
 					fd:     cfd
 					authed: false
+					pid:    peer_pid(cfd) // kernel-attested; basis for safe `sb ctl kill`
 				}
 			}
 		}
@@ -5519,7 +5789,10 @@ fn run_inject(cmd []string) {
 		C.close(sockfd)
 		plain_relay(cmd)
 	}
-	write_str(sockfd, 'CONDUIT\n')
+	// CONDUIT carries the injected cmdline so `sb ctl -v` can show which sub-process
+	// this relay is driving. `\n`/`:` would break line/field framing -> spaces.
+	cmdline := cmd.join(' ').replace('\n', ' ').replace(':', ' ')
+	write_str(sockfd, 'CONDUIT:${cmdline}\n')
 	write_str(sockfd, 'BOOT:${shell}\n')
 	status, b64 := read_resp_b64(sockfd)
 	if status != fr_eof || b64.len == 0 {

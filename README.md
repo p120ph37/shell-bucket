@@ -173,16 +173,41 @@ be available. If no clipboard tool is found, `sb clip` exits with an error.
 From a running remote shell, `sb ctl` (alias: `sb control`) queries and controls the
 running mux via its side-band socket (`$SB_TOKEN` must be set):
 
+`sb ctl` is the general runtime-control namespace; backhaul verbs are prefixed
+`udp` so they read clearly alongside the component-management verbs.
+
 | command | effect |
 |---|---|
-| `sb ctl` / `sb ctl status` | print session stats: in-band byte counts, PTY throughput, UDP backhaul state + IPs, relay links |
-| `sb ctl down` | force a lossless UDP backhaul revert to in-band |
-| `sb ctl up [ip:port,…]` | ask the wrapper to (re)negotiate the UDP backhaul; optional CSV list of manual mux candidates (bypasses STUN) |
-| `sb ctl reneg [ip:port,…]` | alias for `up`; also bypasses the one-shot auto-reneg guard |
+| `sb ctl` / `sb ctl status` | print session stats: in-band byte counts, PTY throughput, UDP backhaul state + IPs, relay/port/rpc counts |
+| `sb ctl -v` | as `status`, plus a per-component listing: each relay, port, and rpc with its PID, category, and description |
+| `sb ctl udpup [ip:port,…]` | ask the wrapper to (re)negotiate the UDP backhaul (bypasses the one-shot auto-reneg guard); optional CSV of manual mux candidates bypasses STUN |
+| `sb ctl udpdn` (alias `udpdown`) | force a lossless UDP backhaul revert to in-band |
+| `sb ctl kill {all\|relays\|ports\|rpcs\|<pid>} [--match=X]` | stop session components (see below) |
+| `sb ctl kill` | with no selector: print usage and the `-v` listing of killable components |
 
-The `up` / `reneg` commands are useful when roaming caused the UDP path to die and
-the automatic one-shot renegotiation has already been used, or when STUN cannot
-discover the mux's public address (e.g. symmetric NAT) and you know it manually.
+`udpup` is useful when roaming killed the UDP path after the automatic one-shot
+renegotiation was already spent, or when STUN can't discover the mux's public
+address (e.g. symmetric NAT) and you know it manually.
+
+### Component listing & safe kill
+
+`sb ctl -v` enumerates this host's **direct** session components:
+
+- **relays** — `sb inject` conduits (each shows the sub-process cmdline it drives)
+- **ports** — `sb tunnel` clients (each shows its bind/dial spec)
+- **rpcs** — in-flight one-shot requests (the verb only; args are withheld as they
+  may carry secrets)
+
+`sb ctl kill` stops them. A selector targets a whole category (`relays`, `ports`,
+`rpcs`), everything (`all`), or one process (`<pid>`). `--match=X` filters to
+components whose description contains `X` (e.g. `kill ports --match=8080`), and can
+double-guard a pid against reuse (`kill 123 --match=8080`).
+
+This is **not** a general `kill`: the mux only ever signals PIDs that are live
+components of *this* session, attested by the kernel (`SO_PEERCRED`) when each
+client connected — a client cannot name an arbitrary process. Deep components
+carried over a relay are torn down by killing that relay (or by running `sb ctl`
+after hopping into it). Kills send `SIGTERM`.
 
 ## Optional UDP backhaul
 
