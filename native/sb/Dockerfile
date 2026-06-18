@@ -48,10 +48,27 @@ RUN git clone --depth=1 --branch ${ZLIB_TAG} https://github.com/madler/zlib /tmp
       /work/csrc/sb_deflate.c \
  && rm -rf /tmp/zlib
 COPY src/ ./src/
+# SB_TEST=1 adds `-d sb_test`, compiling in the `__xxx` self-test hooks (and the
+# test-only helpers they reach). The DEFAULT (unset) is a clean PRODUCTION binary:
+# `-skip-unused` (implied by -prod) + `--gc-sections` then sweep all that
+# scaffolding out, so the shipped `sb` carries no test code. check.sh builds with
+# SB_TEST=1 to get a binary the V self-test suite can drive.
+ARG SB_TEST=
+# Symbol policy diverges by build:
+#   production (default) — `-Wl,-s` strips the symbol table: every byte ships over
+#                          the wire, so the binary carries no symbols/debug info.
+#   test (SB_TEST=1)     — KEEP symbols + `-g` line info: the instrumented binary
+#                          never ships, so richer backtraces on a self-test crash
+#                          are worth the size.
 # -gc none: the sb is a long-lived byte-pump with preallocated buffers and no
 # GC pressure; it also sidesteps static-linking the boehm GC against musl.
 RUN mkdir -p /out \
- && v -enable-globals -cc xx-clang -gc none -prod -cflags '-Oz -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,-s -static' -o /out/sb ./src \
+ && if [ -n "$SB_TEST" ]; then \
+      V_DFLAGS='-d sb_test -g'; LD_STRIP=''; \
+    else \
+      V_DFLAGS=''; LD_STRIP='-Wl,-s'; \
+    fi \
+ && v -enable-globals ${V_DFLAGS} -cc xx-clang -gc none -prod -cflags "-Oz -ffunction-sections -fdata-sections -Wl,--gc-sections ${LD_STRIP} -static" -o /out/sb ./src \
  && xx-verify --static /out/sb
 
 FROM scratch AS dist

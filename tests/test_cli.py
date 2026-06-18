@@ -175,10 +175,3 @@ def test_iterm_inline_image_emits_osc_1337() -> None:
     assert seq.endswith(b"\007")
     assert b";inline=1:" in seq
     assert b"size=8;" in seq
-
-
-def test_main_alias_points_at_cli_group() -> None:
-    """Back-compat shim: `main` still resolves (for old console-script installs)."""
-    from shell_bucket.cli import cli, main
-
-    assert main is cli

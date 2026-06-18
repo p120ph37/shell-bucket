@@ -33,7 +33,11 @@ from shell_bucket.wrapper import (
 pytestmark = pytest.mark.integration
 
 # The colima builder is arm64, so the container runs the linux_arm64 binary.
-_DIST = Path(__file__).resolve().parents[2] / "native" / "sb" / "dist" / "linux_arm64"
+# Integration tests run against the INSTRUMENTED binary (dist-test/, built with
+# SB_TEST=1 — see native/sb/check.sh). It's a faithful superset of production:
+# identical session behavior plus the `__xxx` hooks the cross-impl/e2e drivers
+# need. Production (dist/) omits those hooks by design, so it can't drive them.
+_DIST = Path(__file__).resolve().parents[2] / "native" / "sb" / "dist-test" / "linux_arm64"
 _SB = _DIST / "sb"
 _TMUX = _DIST / "tmux"  # cached static tmux (fetched on first need)
 # The static tmux launcher: shipped in the package, dropped into the bucket so
@@ -48,7 +52,7 @@ def _make_bucket(
     helpers (executable, at root), and freshly regenerated runtimes. With
     `with_tmux`, also drop the static tmux at linux_arm64/tmux."""
     if not _SB.is_file():
-        pytest.skip("no native/sb/dist/linux_arm64/sb; run native/sb/build.sh")
+        pytest.skip("no native/sb/dist-test/linux_arm64/sb; run native/sb/check.sh")
     root = tmp_path / "bucket"
     (root / "linux_arm64").mkdir(parents=True)
     shutil.copy2(_SB, root / "linux_arm64" / "sb")
@@ -257,6 +261,44 @@ async def test_lazy_alias_for_root_helper(ssh_server, tmp_path: Path) -> None:
     bucket = _make_bucket(tmp_path, {"sbsecret": b"#!/bin/sh\necho SECRET_OK\n"})
     out, _seen = await _run_bootstrap(ssh_server, bucket, expect=b"SECRET_OK", send=b"sbsecret\n")
     assert b"SECRET_OK" in out
+
+
+async def test_busybox_applet_symlink_dedup_end_to_end(ssh_server, tmp_path: Path) -> None:
+    """Busybox-style dedup, end to end: the bucket holds a multi-call helper
+    (`sbbox`, dispatching on `$0`) plus an applet symlink (`sbls → sbbox`). The
+    wrapper flattens the link in the manifest (4th column); running the applet on
+    the target fetches the real helper ONCE and materializes a local symlink, so
+    the applet dispatches with no second copy. We then assert the cache holds the
+    real `sbbox` and a `sbls` SYMLINK (the dedup), not two copies."""
+    box = (
+        b'#!/bin/sh\n'
+        b'case "${0##*/}" in\n'
+        b'  sbls) echo "APPLET_LS_OK" ;;\n'
+        b'  *) echo "APPLET_BOX[${0##*/}]" ;;\n'
+        b'esac\n'
+    )
+    bucket = _make_bucket(tmp_path, {"sbbox": box})
+    # The applet symlink lives in the bucket root → sbbox (relative, in-bucket).
+    (bucket.path / "sbls").symlink_to("sbbox")
+    regenerate_runtimes(bucket)  # rewrite the manifest with the link entry
+
+    # Run the applet, then inspect the on-target cache. The gate marker `RES:<…>`
+    # is COMPUTED on the target (real-copy count + link flag), so it can't false-
+    # match the echoed command line the way a literal `LINK=` would; we wait for it.
+    probe = (
+        b"sbls; "
+        b'echo "RES:$(find "$SB_CACHE" -maxdepth 1 -type f -name sbbox | wc -l | tr -d " ")'
+        b'$([ -L "$SB_CACHE/sbls" ] && echo L || echo X)"\n'
+    )
+    out, seen = await _run_bootstrap(
+        ssh_server, bucket, expect=b"RES:1L", send=probe
+    )
+    assert b"APPLET_LS_OK" in out          # the applet ran (dispatched on $0)
+    assert b"RES:1L" in out                # one real copy + sbls is a symlink (dedup)
+    # The applet fetch rode the socket as a FILEREQ for the TERMINAL (sbbox), never
+    # for sbls — no link bytes cross the wire.
+    assert any(ev.startswith(b"R") and b":FILEREQ:sbbox" in ev for ev in seen), seen
+    assert not any(b":FILEREQ:sbls" in ev for ev in seen), seen
 
 
 async def test_strip_at_source_blocks_child_forged_apc(ssh_server, tmp_path: Path) -> None:

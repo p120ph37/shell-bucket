@@ -312,11 +312,5 @@ def fetch_tmux_cmd(version: str | None, platforms: tuple[str, ...], source: str)
         click.echo(f"shell-bucket: {platform} → {path}")
 
 
-# Back-compat: the previous entry point was `cli:main`. Keep a `main` alias
-# so an existing install whose console-script still points at `:main` keeps
-# working until pyproject is re-installed.
-main = cli
-
-
 if __name__ == "__main__":
     cli()

@@ -206,7 +206,8 @@ const apc_intro = u8(0x5f) // '_'
 const st_bs = u8(0x5c) // '\'
 const bel = u8(0x07)
 const colon = u8(0x3a) // ':'
-const prefix = 'shell-bucket:'.bytes()
+const prefix = 'shell-bucket:' // our APC payload prefix (string; `bprefix` tests it)
+const prefix_bytes = prefix.bytes()
 
 enum MState {
 	ground
@@ -258,7 +259,7 @@ fn build_apc(cmd []u8) []u8 {
 	mut o := []u8{}
 	o << esc
 	o << apc_intro
-	o << prefix
+	o << prefix_bytes
 	o << cmd
 	o << esc
 	o << st_bs
@@ -288,7 +289,7 @@ fn (mut s Scanner) finish() {
 		end = s.buf.len - 1
 	}
 	payload := s.buf[2..end]
-	if starts_with(payload, prefix) {
+	if bprefix(payload, prefix) {
 		s.payloads << payload[prefix.len..].clone()
 		s.buf = []u8{}
 		s.state = .ground
@@ -367,18 +368,6 @@ fn (mut s Scanner) take_payloads() [][]u8 {
 	p := s.payloads
 	s.payloads = [][]u8{}
 	return p
-}
-
-fn starts_with(hay []u8, pre []u8) bool {
-	if hay.len < pre.len {
-		return false
-	}
-	for i in 0 .. pre.len {
-		if hay[i] != pre[i] {
-			return false
-		}
-	}
-	return true
 }
 
 fn read_all_fd(fd int) []u8 {
@@ -515,7 +504,7 @@ fn read_resp_b64(fd int) (int, string) {
 		if line.starts_with('~EOF') {
 			status = fr_eof
 			break
-		} else if line.starts_with('~ERR') || line.starts_with('~SYM') {
+		} else if line.starts_with('~ERR') {
 			status = fr_err
 			break
 		} else {
@@ -552,7 +541,7 @@ fn read_fileresp(fd int, mut f os.File) (int, string, i64) {
 		} else if line.starts_with('~ERR NOT_CHANGED') {
 			status = fr_notchanged
 			break
-		} else if line.starts_with('~ERR') || line.starts_with('~SYM') {
+		} else if line.starts_with('~ERR') {
 			status = fr_err
 			break
 		} else {
@@ -649,6 +638,10 @@ fn filereq(token string, name string, cached_mtime i64, os_name string, arch str
 struct ManifestEntry {
 	mtime i64
 	exec  bool
+	link  string // non-empty: this path is an in-bucket symlink → this terminal path
+	             // (busybox-style dedup; the wrapper pre-flattened the chain). mtime/exec
+	             // describe the terminal. We fetch the terminal once and materialize the
+	             // link locally — never fetch the link's own bytes.
 }
 
 fn norm_os(s string) string {
@@ -676,6 +669,7 @@ fn parse_manifest(text string) map[string]ManifestEntry {
 		m[parts[0]] = ManifestEntry{
 			mtime: parts[1].i64()
 			exec:  parts.len >= 3 && parts[2].contains('x')
+			link:  if parts.len >= 4 { parts[3] } else { '' }
 		}
 	}
 	return m
@@ -776,6 +770,26 @@ fn ensure_manifest(prefer_socket bool) string {
 	}
 }
 
+// Fetch the exact bucket `path` into `cp` if absent or older than `mtime` (the
+// manifest version id), and stamp it. Returns true on a present+current file.
+// Unlike ensure_cached this takes an ALREADY-RESOLVED path (no os/arch fallback)
+// — used to materialize a symlink's terminal, which the wrapper pre-resolved.
+fn ensure_terminal(path string, cp string, mtime i64, prefer_socket bool) bool {
+	local := if !os.is_link(cp) && os.exists(cp) { i64(os.file_last_mod_unix(cp)) } else { i64(-1) }
+	if local >= mtime {
+		if local != mtime {
+			set_mtime(cp, mtime)
+		}
+		return true
+	}
+	st := filereq(os.getenv('SB_TOKEN'), path, 0, '', '', cp, prefer_socket)
+	if st == fr_eof || st == fr_notchanged {
+		set_mtime(cp, mtime)
+		return true
+	}
+	return false
+}
+
 // Ensure the cache file for `name` is present and current; return its path, or
 // '' on failure. Resolution is manifest-driven (the manifest is auto-populated
 // by ensure_manifest if absent); freshness is the manifest mtime as version id.
@@ -789,6 +803,33 @@ fn ensure_cached(name string, prefer_socket bool) string {
 	if !ok {
 		eprintln('sb: ${name}: not in manifest')
 		return ''
+	}
+	// Busybox-style symlink: the wrapper flattened the chain to `ent.link` (the
+	// terminal bucket path) and stamped this entry with the TERMINAL's mtime/exec.
+	// Fetch the terminal ONCE into its own cache slot, then materialize a local
+	// symlink (named `path`, so argv[0]'s basename drives the multi-call applet
+	// dispatch on exec) → it. No link bytes ride the wire; N applets share 1 copy.
+	if ent.link != '' {
+		tcp := '${cache}/${ent.link}'
+		if !ensure_terminal(ent.link, tcp, ent.mtime, prefer_socket) {
+			eprintln('sb: ${name}: terminal ${ent.link} fetch failed')
+			return ''
+		}
+		cp := '${cache}/${path}'
+		// Point cp → terminal iff it isn't already that exact link (idempotent;
+		// re-runs are a no-op). os.symlink can't overwrite, so clear cp first.
+		if !(os.is_link(cp) && (os.real_path(cp) == os.real_path(tcp))) {
+			dir := os.dir(cp)
+			if dir != '' {
+				os.mkdir_all(dir) or {}
+			}
+			os.rm(cp) or {}
+			os.symlink(tcp, cp) or {
+				eprintln('sb: ${name}: cannot link → ${ent.link}')
+				return ''
+			}
+		}
+		return cp
 	}
 	// The binary itself caches FLAT ($SB_CACHE/sb) — where the shell bootstrap
 	// writes it, `sb mux` execs from, and the dispatch symlink points — not under
@@ -1409,6 +1450,43 @@ fn run_ctl(args []string) {
 		}
 	}
 	C._exit(0) // unreachable; satisfies @[noreturn] checker
+}
+
+// `sb survey` — ask the WRAPPER to enumerate the multiplexer tree and print the
+// result. Rides the ordinary mux-socket relay: we send `SURVEY` as a one-shot
+// request; the host mux frames it `R<id>:SURVEY` up the byte stream, the wrapper
+// broadcasts a SURVEY down the tree, gathers every mux's `SURVEYR` reply for a
+// short window, and routes the formatted node table back (raw, `~END`-terminated)
+// to us. No new mux machinery — the wrapper owns the topology; this is its readout.
+@[noreturn]
+fn run_survey() {
+	token := os.getenv('SB_TOKEN')
+	if token == '' {
+		die('SB_TOKEN not set')
+	}
+	fd := mux_sock_connect(mux_sock_path(token))
+	if fd < 0 {
+		eprintln('sb survey: mux not reachable (is sb mux running with this token?)')
+		C._exit(ex_unavailable)
+	}
+	write_str(fd, '${token_secret(token)}\n')
+	ok_line, ok := read_line(fd)
+	if !ok || ok_line != 'OK' {
+		C.close(fd)
+		C._exit(ex_noperm)
+	}
+	write_str(fd, 'SURVEY\n')
+	// Read the relayed table line-by-line until the `~END` sentinel (the route
+	// bytes arrive raw — no EOF, since the mux socket stays open).
+	for {
+		line, lok := read_line(fd)
+		if !lok || line == '~END' {
+			break
+		}
+		println(line)
+	}
+	C.close(fd)
+	C._exit(0)
 }
 
 // fmt_bytes formats a byte count as a human-readable string (B / KB / MB).
@@ -3733,6 +3811,15 @@ fn run_cryptotest() {
 //   sb fetch / run / token / inject    — protocol subcommands
 //   <symlink>                          — busybox-style PATH dispatch (argv[0] ≠ sb)
 fn main() {
+	// The `__xxx` hooks and their exclusive helpers (the run_*test/probe/serve
+	// drivers, plus codecs only they reach — e.g. blocking `stun_query`, the
+	// reverse-direction `encode_offer`/`decode_answer`) exist ONLY for the V
+	// self-test suite. Gate the entire dispatch behind `-d sb_test`: a `-prod`
+	// build (no flag) makes every test-only fn unreachable, so `-skip-unused` +
+	// `--gc-sections` sweep them out of the shipped binary. Every byte rides the
+	// wire, so the production `sb` carries no test scaffolding. Build the test
+	// binary with `v -d sb_test …` (see check.sh).
+	$if sb_test ? {
 	if os.args.len >= 2 && os.args[1] == '__muxscan' {
 		run_muxscan()
 	}
@@ -3747,13 +3834,18 @@ fn main() {
 		C._exit(0)
 	}
 	// Self-test hook: `sb __resolvetest <manifest> <name> [os] [arch]` prints the
-	// resolved `<path>\t<mtime>\t<exec>` (or `MISS`).
+	// resolved `<path>\t<mtime>\t<exec>[\t<link>]` (or `MISS`). The link field is
+	// appended only for a symlink entry (the busybox-style dedup terminal).
 	if os.args.len >= 4 && os.args[1] == '__resolvetest' {
 		text := os.read_file(os.args[2]) or { '' }
 		o := if os.args.len > 4 { os.args[4] } else { '' }
 		a := if os.args.len > 5 { os.args[5] } else { '' }
 		ok, path, ent := resolve_manifest(parse_manifest(text), os.args[3], o, a)
-		println(if ok { '${path}\t${ent.mtime}\t${ent.exec}' } else { 'MISS' })
+		mut out := '${path}\t${ent.mtime}\t${ent.exec}'
+		if ent.link != '' {
+			out += '\t${ent.link}'
+		}
+		println(if ok { out } else { 'MISS' })
 		C._exit(0)
 	}
 	// Self-test hook: `sb __bintest <bindir> <self> <manifest>` populates the
@@ -3761,6 +3853,20 @@ fn main() {
 	// shell afterward (not os.ls — see populate_bin's same-process caveat).
 	if os.args.len >= 5 && os.args[1] == '__bintest' {
 		populate_bin(os.args[2], os.args[3], os.read_file(os.args[4]) or { '' })
+		C._exit(0)
+	}
+	// Self-test hook: `sb __linktest <name>` exercises ensure_cached's busybox-style
+	// symlink branch. SB_CACHE must be pre-staged with a manifest + an already-current
+	// terminal file, so NO FILEREQ fires (present-and-current path) and we test only
+	// terminal-fetch-skip + local link materialization. Prints `<cp>\t<target>` where
+	// target is the link's real path basename, or `ERR`.
+	if os.args.len >= 3 && os.args[1] == '__linktest' {
+		cp := ensure_cached(os.args[2], false)
+		if cp == '' || !os.is_link(cp) {
+			println('ERR')
+			C._exit(1)
+		}
+		println('${cp}\t${os.real_path(cp).all_after_last('/')}')
 		C._exit(0)
 	}
 	// Self-test hook: `sb __prunetest <cache> <manifest-file>` reconciles the cache
@@ -3870,6 +3976,7 @@ fn main() {
 	if os.args.len >= 2 && os.args[1] == '__revertprobe' {
 		run_revertprobe()
 	}
+	} // $if sb_test
 	prog := os.args[0].all_after_last('/')
 	if prog == 'sb' {
 		if os.args.len >= 2 {
@@ -3927,12 +4034,15 @@ fn main() {
 				'clip' {
 					run_clip(os.args[2..].clone())
 				}
-					else { die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|inject <cmd...>|ctl [status|down|up|reneg]|clip [--copy|--paste]}') }
+				'survey' {
+					run_survey()
+				}
+					else { die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|inject <cmd...>|ctl [status|down|up|reneg]|clip [--copy|--paste]|survey}') }
 			}
 		}
 		// Bare `sb` has no action — `sb inject <cmd>` propagates the tooling to the
 		// next hop.
-		die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|inject <cmd...>|ctl [status|down|up|reneg]|clip [--copy|--paste]}')
+		die('usage: sb {mux|fetch <name>|run <name> [args]|token <opts>|tunnel <spec>|inject <cmd...>|ctl [status|down|up|reneg]|clip [--copy|--paste]|survey}')
 	}
 	// Invoked via a PATH symlink (argv[0] ≠ sb): dispatch that tool.
 	run_tool(prog, os.args[1..].clone())

@@ -19,8 +19,8 @@ from shell_bucket.backhaul import (
     Arq,
     FrameStream,
     UdpBackhaul,
+    _put_ipport,
     decode_answer,
-    encode_answer,
     encode_offer,
     now_ms,
     stun_parse,
@@ -28,6 +28,17 @@ from shell_bucket.backhaul import (
     udp_open,
     udp_seal,
 )
+
+
+def encode_answer(nonce: bytes, cands: list[tuple[str, int]]) -> bytes:
+    """Mux-side UP:A encoder. The wrapper only ever *decodes* answers (the mux
+    answers), so this lives here as a test helper — the inverse of the production
+    `decode_answer` it round-trips against. Mirror of the V `encode_answer`."""
+    import base64
+
+    blob = bytes([0x01]) + b"A" + nonce[:8]
+    blob += bytes([len(cands)]) + b"".join(_put_ipport(ip, p) for ip, p in cands)
+    return base64.b64encode(blob)
 
 
 def test_nist_aesgcm_kat():

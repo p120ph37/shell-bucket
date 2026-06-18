@@ -14,7 +14,6 @@ from shell_bucket.file_delivery import (
     ERR_NOT_FOUND,
     ERR_TOKEN,
     NO_CACHE_MTIME,
-    SYM_TOKEN,
     Bucket,
     FileRequest,
     encode_for_delivery,
@@ -22,7 +21,6 @@ from shell_bucket.file_delivery import (
     normalize_arch,
     normalize_os,
     parse_filereq,
-    sym_delivery,
 )
 
 
@@ -113,19 +111,13 @@ def test_encode_body_only_base64() -> None:
 
 
 def test_token_constants() -> None:
-    assert EOF_TOKEN == b"~EOF" and ERR_TOKEN == b"~ERR" and SYM_TOKEN == b"~SYM"
+    assert EOF_TOKEN == b"~EOF" and ERR_TOKEN == b"~ERR"
     assert ERR_NOT_FOUND == "NOT_FOUND" and ERR_NOT_CHANGED == "NOT_CHANGED"
 
 
 def test_err_delivery() -> None:
     assert err_delivery("NOT_FOUND") == b"~ERR NOT_FOUND\n"
     assert err_delivery("X", "y") == b"~ERR X y\n"
-
-
-def test_sym_delivery() -> None:
-    assert sym_delivery("busybox") == b"~SYM busybox\n"
-    with pytest.raises(ValueError):
-        sym_delivery("a\nb")
 
 
 # ───── Bucket resolution ────────────────────────────────────────────────────
@@ -246,6 +238,50 @@ def test_rcd_fragments_sorted(tmp_path: Path) -> None:
     _put(tmp_path, "rc.d/50-b.sh")
     _put(tmp_path, "rc.d/00-a.sh")
     assert Bucket(tmp_path).rcd_fragments() == ["rc.d/00-a.sh", "rc.d/50-b.sh"]
+
+
+# ───── busybox-style symlink dedup (manifest link column) ────────────────────
+
+def test_manifest_emits_link_target_for_in_bucket_symlink(tmp_path: Path) -> None:
+    # busybox + an applet symlink → busybox. The applet's manifest line carries a
+    # 4th link-target column and inherits busybox's mtime + exec bit (so it stays
+    # dispatchable), instead of being emitted as a second full copy.
+    bb = _put(tmp_path, "busybox", body=b"\x7fELFbusybox", execu=True)
+    (tmp_path / "ls").symlink_to("busybox")  # relative, in-bucket
+    lines = Bucket(tmp_path).manifest_text().splitlines()
+    m = int(bb.stat().st_mtime)
+    assert f"busybox\t{m}\tx" in lines
+    assert f"ls\t{m}\tx\tbusybox" in lines  # link → terminal, terminal's mtime/exec
+
+
+def test_manifest_chases_chain_to_terminal(tmp_path: Path) -> None:
+    # ls → coreutils → realbin: the link column is the TERMINAL (flattened here,
+    # so the on-target sb never chases at runtime).
+    real = _put(tmp_path, "realbin", body=b"\x7fELF", execu=True)
+    (tmp_path / "coreutils").symlink_to("realbin")
+    (tmp_path / "ls").symlink_to("coreutils")
+    lines = Bucket(tmp_path).manifest_text().splitlines()
+    m = int(real.stat().st_mtime)
+    assert f"ls\t{m}\tx\trealbin" in lines
+    assert f"coreutils\t{m}\tx\trealbin" in lines
+
+
+def test_manifest_omits_symlink_escaping_bucket(tmp_path: Path) -> None:
+    # A link whose chain leaves the bucket is not served at all (no copy, no link).
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret").write_bytes(b"SECRET")
+    bucket = tmp_path / "bucket"
+    bucket.mkdir()
+    (bucket / "escape").symlink_to(outside / "secret")
+    lines = Bucket(bucket).manifest_text().splitlines()
+    assert not any(line.startswith("escape\t") for line in lines)
+
+
+def test_manifest_omits_dangling_symlink(tmp_path: Path) -> None:
+    (tmp_path / "dead").symlink_to("nonexistent-target")
+    lines = Bucket(tmp_path).manifest_text().splitlines()
+    assert not any(line.startswith("dead\t") for line in lines)
 
 
 def test_scanning_empty_bucket(tmp_path: Path) -> None:

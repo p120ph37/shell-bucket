@@ -26,9 +26,13 @@ Response framing — base64 body lines then exactly one `~` control token line:
                        mtime=<N>     source mtime; the stub `touch -d @N`s the
                                      cache so a later same-mtime FILEREQ → NOT_CHANGED.
   ~ERR <CODE> [detail]  NOT_FOUND | NOT_CHANGED (more may be added).
-  ~SYM <target>      symlink (busybox-style multi-call; see chase protocol).
 
 `~` is in neither base64 alphabet, so a token line can't collide with the body.
+
+Bucket symlinks are NOT a wire concept: the wrapper pre-flattens each symlink
+chain to its terminal in `sb-manifest` (a 4th `<link-target>` column; see
+`Bucket.manifest_text`), so `sb` fetches the real file once and materializes the
+applet links locally — busybox-style dedup with no runtime symlink chase.
 """
 
 from __future__ import annotations
@@ -42,7 +46,6 @@ from pathlib import Path
 # Control tokens — always `~`-prefixed; never collide with base64.
 EOF_TOKEN = b"~EOF"
 ERR_TOKEN = b"~ERR"
-SYM_TOKEN = b"~SYM"
 
 # Standard ~ERR codes.
 ERR_NOT_FOUND = "NOT_FOUND"
@@ -158,13 +161,6 @@ def err_delivery(code: str, detail: str = "") -> bytes:
     return _err_line(code, detail)
 
 
-def sym_delivery(target: str) -> bytes:
-    """Build a symlink-only response (`~SYM <target>`)."""
-    if not target or "\n" in target:
-        raise ValueError(f"invalid symlink target: {target!r}")
-    return SYM_TOKEN + b" " + target.encode("utf-8") + b"\n"
-
-
 class Bucket:
     """A local tree of portable files served over the byte stream."""
 
@@ -248,25 +244,69 @@ class Bucket:
             f"rc.d/{p.name}" for p in rcd.iterdir() if p.is_file()
         )
 
+    def _link_target(self, p: Path) -> str | None:
+        """If `p` is a symlink whose chain terminates at a real file inside the
+        bucket, the terminal's bucket-relative path; else None.
+
+        This is the busybox-style dedup primitive: the wrapper flattens each
+        symlink chain to its terminal *here*, so the on-target `sb` fetches the
+        real binary once and materializes the applet links to it locally — no
+        runtime chase, and one copy instead of N. Chains escaping the bucket (or
+        dangling / pointing at a dir) are not served as links."""
+        if not p.is_symlink():
+            return None
+        try:
+            root = self.path.resolve()
+            real = p.resolve()  # follows the whole chain
+        except OSError:
+            return None
+        if not real.is_file():
+            return None
+        if real != root and root not in real.parents:
+            return None  # escapes the bucket → don't serve
+        return real.relative_to(root).as_posix()
+
     def manifest_text(self) -> str:
         """The `sb-manifest` contents: one TSV line per bucket file —
-        `<path>\\t<mtime>\\t<flags>` (flags = `x` if executable). Covers every
-        file (helpers, `sb-<family>.rc`, the `sb` binary, rc.d/…) except the
-        manifest itself. This is the on-target freshness oracle `sb` parses;
-        the format mirrors the V `parse_manifest`.
+        `<path>\\t<mtime>\\t<flags>[\\t<link-target>]`. `flags` is `x` if
+        executable; a 4th `<link-target>` field (terminal bucket-relative path)
+        marks an in-bucket symlink, and its `flags` carry the *terminal's* exec
+        bit (so an applet link stays dispatchable). Covers every file (helpers,
+        `sb-<family>.rc`, the `sb` binary, rc.d/…) except the manifest itself.
+        This is the on-target freshness oracle `sb` parses; the format mirrors
+        the V `parse_manifest`.
         """
         if not self.path.is_dir():
             return ""
         lines: list[str] = []
         for p in sorted(self.path.rglob("*")):
-            if not p.is_file():
-                continue
+            # A symlink is served ONLY as a link entry to an in-bucket terminal.
+            # is_file() follows the link, so without this branch a symlink-to-file
+            # would be emitted either as a duplicate full copy (in-bucket — the
+            # very duplication the link entry avoids) or, worse, as a copy of a
+            # file OUTSIDE the bucket (`serve` would refuse it anyway, so listing
+            # it only yields a failed fetch). Skip any symlink with no in-bucket
+            # terminal (escaping / dangling / →dir).
+            if p.is_symlink():
+                link = self._link_target(p)
+                if link is None:
+                    continue
+            else:
+                link = None
+                if not p.is_file():
+                    continue
             rel = p.relative_to(self.path).as_posix()
             if rel == MANIFEST_NAME:
                 continue
-            mtime = int(p.stat().st_mtime)
-            flags = "x" if os.access(p, os.X_OK) else ""
-            lines.append(f"{rel}\t{mtime}\t{flags}")
+            # mtime/exec describe the resolved terminal (links carry their
+            # target's identity); a plain file is its own terminal.
+            terminal = self.path / link if link is not None else p
+            mtime = int(terminal.stat().st_mtime)
+            flags = "x" if os.access(terminal, os.X_OK) else ""
+            line = f"{rel}\t{mtime}\t{flags}"
+            if link is not None:
+                line += f"\t{link}"
+            lines.append(line)
         return "".join(line + "\n" for line in lines)
 
     def write_manifest(self) -> None:

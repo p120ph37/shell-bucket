@@ -82,8 +82,10 @@ async def cross_punch() -> None:
         await asyncio.sleep(0.02)
     assert bh.state == "up", "punch did not establish"
     # sb __punchrecv inflates the backhaul stream, so send the deterministic run
-    # through the compressor (send_raw = compress + queue, no frame wrapping).
-    bh.send_raw(test_stream(total))
+    # through the compressor + ARQ directly (compress + queue, no frame wrapping
+    # and no revert tracking — this driver streams raw and never reverts).
+    bh.arq.app_send(bh._compress(test_stream(total)), now_ms())
+    bh._flush()
     for _ in range(2000):
         if not bh.arq.pending and not bh.arq.unacked:
             break

@@ -30,6 +30,13 @@ hop counter. The wrapper sees the complete topology as a graph of nodes at known
 depths. Source-routed `PUSH` commands reach any specific node by path; `SURVEY`
 broadcasts collect all nodes' identities.
 
+From a running remote shell, **`sb survey`** prints that topology: it asks the
+wrapper (over the mux socket) to broadcast a `SURVEY`, collect every node's
+`SURVEYR` reply, and route back a table of `depth · route · host · os · arch ·
+pid` — one row per `sb mux` in the tree. (This is the in-session readout of the
+graph the wrapper maintains; richer dashboard tooling can build on the same
+wrapper-side topology.)
+
 The `sb inject <cmd>` / `sb i <cmd>` subcommand propagates the tooling to the
 next hop without a full `sb mux` — useful for nested `ssh` calls that the tooled
 shell doesn't launch itself.

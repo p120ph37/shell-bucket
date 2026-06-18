@@ -486,13 +486,6 @@ class UdpBackhaul:
             # in-band behind the undelivered tail, preserving order.
             self.sent.append((self.tx_off, frame))
 
-    def send_raw(self, data: bytes) -> None:
-        # Compress + queue an already-framed byte run with no per-frame tracking —
-        # used only by the cross-impl test, which drives a raw stream and never reverts.
-        if self.state == "up" and data:
-            self.arq.app_send(self._compress(data), now_ms())
-            self._flush()
-
     # ── lossless revert handoff (coordinated over the durable in-band channel) ──
     def _begin_revert(self) -> None:
         """Enter the draining state and tell the peer, in-band, how many of its
@@ -528,14 +521,6 @@ class UdpBackhaul:
                 self._loop.remove_reader(self.sock.fileno())
             self.sock.close()
             self.sock = None
-
-
-def encode_answer(nonce: bytes, cands: list[tuple[str, int]]) -> bytes:
-    import base64
-
-    blob = bytes([0x01]) + b"A" + nonce[:8]
-    blob += bytes([len(cands)]) + b"".join(_put_ipport(ip, p) for ip, p in cands)
-    return base64.b64encode(blob)
 
 
 def decode_answer(b64: bytes) -> tuple[bytes, list[tuple[str, int]]] | None:

@@ -19,7 +19,9 @@ pytestmark = pytest.mark.integration
 
 _REPO = Path(__file__).resolve().parents[2]
 _ARCH = "arm64" if platform.machine() in ("arm64", "aarch64") else "amd64"
-_SB = _REPO / f"native/sb/dist/linux_{_ARCH}/sb"
+# The instrumented binary (dist-test/, SB_TEST=1): the `__arqrecv`/`__punchrecv`
+# hooks this driver needs exist ONLY there — production (dist/) strips them.
+_SB = _REPO / f"native/sb/dist-test/linux_{_ARCH}/sb"
 
 
 def _docker_ok() -> bool:
@@ -32,7 +34,7 @@ def test_python_sb_wire_compatible() -> None:
     if not _docker_ok():
         pytest.skip("Docker not available")
     if not _SB.exists():
-        pytest.skip(f"no {_SB}; run native/sb/build.sh")
+        pytest.skip(f"no {_SB}; run native/sb/check.sh")
     r = subprocess.run(
         [
             "docker", "run", "--rm", "--platform", f"linux/{_ARCH}",

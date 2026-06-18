@@ -45,3 +45,17 @@ def test_distinct_routes_coexist_and_sort() -> None:
     assert t.routes() == [(), (3,), (3, 7)]
     assert t.depths() == [1, 2, 3]
     assert [n.host for n in t.nodes()] == ["top", "mid", "deep"]
+
+
+def test_format_table_is_what_sb_survey_prints() -> None:
+    t = Topology()
+    t.record(b"", b"host=top:os=Linux:arch=aarch64:pid=1")
+    t.record(b"3,7", b"host=deep:os=Linux:arch=x86_64:pid=99")
+    out = t.format_table()
+    lines = out.splitlines()
+    assert lines[0].split() == ["DEPTH", "ROUTE", "HOST", "OS", "ARCH", "PID"]
+    # top mux: depth 1, empty route renders "-"
+    assert lines[1].split() == ["1", "-", "top", "Linux", "aarch64", "1"]
+    # deep mux: depth = len(route)+1 = 3, route joined by commas
+    assert lines[2].split() == ["3", "3,7", "deep", "Linux", "x86_64", "99"]
+    assert out.endswith("\n")

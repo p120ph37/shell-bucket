@@ -79,5 +79,26 @@ class Topology:
         """Sorted distinct depths present."""
         return sorted({n.depth for n in self._nodes.values()})
 
+    def format_table(self) -> str:
+        """A human-readable survey listing (one row per node, ordered by route).
+        This is what `sb survey` prints; the wrapper builds it and routes it back
+        to the in-session client. Columns: depth, route, host, os, arch, pid."""
+        rows = [("DEPTH", "ROUTE", "HOST", "OS", "ARCH", "PID")]
+        for n in self.nodes():
+            route = ",".join(str(c) for c in n.route) or "-"
+            rows.append(
+                (
+                    str(n.depth),
+                    route,
+                    n.host,
+                    n.fields.get("os", "?"),
+                    n.fields.get("arch", "?"),
+                    n.pid or "?",
+                )
+            )
+        widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+        lines = ["  ".join(c.ljust(widths[i]) for i, c in enumerate(row)) for row in rows]
+        return "\n".join(lines) + "\n"
+
     def __len__(self) -> int:
         return len(self._nodes)

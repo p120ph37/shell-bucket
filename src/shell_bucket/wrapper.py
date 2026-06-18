@@ -718,6 +718,29 @@ async def _bridge_stdio(
 
     tunnels = TunnelManager(send_down)
 
+    # `sb survey` RPC. A framed `R<id>:SURVEY` request rides the ordinary mux-socket
+    # relay up; the wrapper answers it asynchronously: broadcast a fresh-id SURVEY
+    # down, let the normal dispatch path record SURVEYR replies into the topology
+    # for a short collection window, then route the formatted table back as the
+    # request's `R<id>` reply. A monotonic survey id per run keeps overlapping
+    # surveys from cross-recording.
+    survey_seq = 0
+    survey_tasks: set[asyncio.Task] = set()
+    SURVEY_WINDOW = 1.0  # seconds to gather SURVEYR replies before answering
+
+    async def run_survey(rid: int) -> None:
+        nonlocal survey_seq
+        if server is None:
+            return
+        survey_seq += 1
+        server.topology = Topology()  # fresh snapshot for this run
+        send_down(build_survey(survey_seq))
+        await asyncio.sleep(SURVEY_WINDOW)  # SURVEYR replies land via dispatch_frame
+        # `~END\n` sentinel terminates the reply (the mux relays the route bytes to
+        # the `sb survey` client raw, with no EOF), mirroring the `ctl` STATUS wire.
+        table = server.topology.format_table().encode("utf-8") + b"~END\n"
+        send_down(build_route(rid, table))
+
     # Preempt the tty during the mux's pre-pump setup: hold user keystrokes until it
     # signals MUXUP (ready to demux), so tty bytes never interlace the mux_setup
     # fetch exchange — the same channel-separation the conduit relay enforces deeper
@@ -780,6 +803,10 @@ async def _bridge_stdio(
             if rid in tunnels or inner.startswith(b"TUN:"):
                 tunnels.handle(rid, inner)
                 return
+            if inner == b"SURVEY":  # `sb survey` RPC → async broadcast + collect + reply
+                survey_tasks.add(t := asyncio.create_task(run_survey(rid)))
+                t.add_done_callback(survey_tasks.discard)
+                return
         if server is None:
             return
         resp = server.serve(ev)
@@ -837,6 +864,8 @@ async def _bridge_stdio(
             with contextlib.suppress(NotImplementedError, ValueError):
                 loop.remove_signal_handler(signal.SIGWINCH)
             tunnels.close_all()
+            for t in survey_tasks:
+                t.cancel()
             if tm is not None:
                 tm.close()  # cancels any in-flight offer/reneg tasks too
             r2l.cancel()
